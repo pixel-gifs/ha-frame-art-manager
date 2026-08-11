@@ -13,6 +13,7 @@ const tagsRouter = require('./routes/tags');
 const syncRouter = require('./routes/sync');
 const haRouter = require('./routes/ha');
 const analyticsRouter = require('./routes/analytics');
+const collageRouter = require('./routes/collage');
 
 const app = express();
 const PORT = process.env.PORT || 8099;
@@ -66,6 +67,7 @@ app.use('/api/tags', tagsRouter);
 app.use('/api/sync', syncRouter);
 app.use('/api/ha', haRouter);
 app.use('/api/analytics', analyticsRouter);
+app.use('/api/collage', collageRouter);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

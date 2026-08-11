@@ -379,6 +379,63 @@ Returns semantic breakdown of changes to upload/download.
 
 **Note:** Renames are detected by Git's "R" status code and counted as 1 change (not 2).
 
+### Collage
+
+All collage endpoints take a `recipe` object:
+
+```json
+{
+  "template": "diptych-2 | triptych-3 | grid-2x2 | hero-left",
+  "matte": { "preset": "gallery-white | ivory | museum-black", "borderWidth": 120 },
+  "slots": [{ "imageId": "portrait-a.jpg", "focal": { "x": 0.5, "y": 0.5 } }]
+}
+```
+
+#### Preview Collage
+```http
+POST /api/collage/preview
+Content-Type: application/json
+
+{ "recipe": { /* recipe */ } }
+```
+
+Returns a ~960px-wide JPEG (`image/jpeg`, `Cache-Control: no-store`). No disk writes — safe to call on every debounced edit.
+
+#### Save Collage
+```http
+POST /api/collage
+Content-Type: application/json
+
+{ "recipe": { /* recipe */ }, "tags": ["collage", "family"] }
+```
+
+Renders the full 3840x2160 JPG into `library/`, generates a thumbnail, and registers the image in `metadata.json` with the recipe stored in a `collageRecipe` field.
+
+**Response:**
+```json
+{ "success": true, "filename": "collage-diptych-2-20260811-120000.jpg", "data": { /* metadata entry */ } }
+```
+
+#### Re-render Collage
+```http
+PUT /api/collage/:imageId
+Content-Type: application/json
+
+{ "recipe": { /* edited recipe */ } }
+```
+
+Re-renders an existing collage in place (same filename). `404` if the image doesn't exist, `400` if it isn't a collage.
+
+#### Auto-generate Collage
+```http
+POST /api/collage/auto
+Content-Type: application/json
+
+{ "tagPool": ["family"], "template": "diptych-2", "mattePreset": "ivory", "tags": ["auto"] }
+```
+
+Picks aspect-compatible portraits from the tag pool (random template/preset when unspecified), renders, and saves unattended. `template`, `mattePreset`, and `tags` are optional. Intended for nightly HA automations. Response adds the chosen `recipe`.
+
 ### Static Files
 
 ```http
