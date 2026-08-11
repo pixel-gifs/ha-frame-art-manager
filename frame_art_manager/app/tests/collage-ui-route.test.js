@@ -67,7 +67,9 @@ test('GET /collage/ serves the built index.html', async () => {
   const dist = await makeDist();
   try {
     await withServer(dist, async (baseUrl) => {
-      const res = await fetch(`${baseUrl}/collage/?ids=a.jpg,b.jpg`);
+      // redirect: 'manual' so a bogus /collage/ -> /collage/collage/ redirect
+      // can't be silently followed into the index.html fallback
+      const res = await fetch(`${baseUrl}/collage/?ids=a.jpg,b.jpg`, { redirect: 'manual' });
       assert.strictEqual(res.status, 200);
       const body = await res.text();
       assert.ok(body.includes('Collage Builder'));

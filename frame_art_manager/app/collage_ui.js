@@ -15,7 +15,10 @@ const DEFAULT_DIST = path.join(__dirname, 'collage-ui', 'dist');
  * 301 sends an absolute path, which would drop the ingress prefix.
  */
 function mountCollageUi(app, distPath = DEFAULT_DIST) {
-  app.get('/collage', (req, res) => {
+  app.get('/collage', (req, res, next) => {
+    // Express matches '/collage/' here too (strict routing off) — only the
+    // slashless form needs the redirect; let the rest fall through to static.
+    if (req.path !== '/collage') return next();
     const query = req.url.slice(req.path.length);
     res.redirect(301, `collage/${query}`);
   });
