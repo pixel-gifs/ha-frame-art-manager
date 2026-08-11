@@ -24,8 +24,7 @@ export function editIdFromQuery(search = window.location.search) {
   return new URLSearchParams(search).get('edit') || null;
 }
 
-async function parseJsonOrThrow(res, fallbackMessage) {
-  if (res.ok) return res.json();
+async function throwApiError(res, fallbackMessage) {
   let message = fallbackMessage;
   try {
     const body = await res.json();
@@ -34,6 +33,11 @@ async function parseJsonOrThrow(res, fallbackMessage) {
     // Non-JSON error body — keep the fallback message
   }
   throw new Error(message);
+}
+
+async function parseJsonOrThrow(res, fallbackMessage) {
+  if (res.ok) return res.json();
+  return throwApiError(res, fallbackMessage);
 }
 
 export async function fetchLibrary() {
@@ -55,23 +59,9 @@ function postJson(url, body, method = 'POST') {
 }
 
 /** Low-res WYSIWYG render of the recipe; resolves to an object URL. */
-export async function fetchPreviewUrl(recipe, signal) {
-  const res = await fetch(`${API_BASE}/collage/preview`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ recipe }),
-    signal,
-  });
-  if (!res.ok) {
-    let message = `Preview failed (${res.status})`;
-    try {
-      const body = await res.json();
-      if (body && body.error) message = body.error;
-    } catch {
-      // keep fallback
-    }
-    throw new Error(message);
-  }
+export async function fetchPreviewUrl(recipe) {
+  const res = await postJson(`${API_BASE}/collage/preview`, { recipe });
+  if (!res.ok) return throwApiError(res, `Preview failed (${res.status})`);
   return URL.createObjectURL(await res.blob());
 }
 

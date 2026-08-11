@@ -41,6 +41,14 @@ export default function PreviewPane({ recipe, library, previewUrl, loading, erro
       ? computeCoverCrop(dims.width, dims.height, win.width, win.height, slot.focal)
       : { scaledW: win.width * 2, scaledH: win.height * 2 };
 
+    // The server clamps the crop to stay inside the photo, so focal values
+    // past the pan limits change nothing visually. Clamp writes to the
+    // achievable range [winHalf, 1 - winHalf] — the drag stops exactly when
+    // the photo edge is reached instead of accumulating invisible overshoot
+    // that would have to unwind before a reversed drag takes effect again.
+    const fxHalf = Math.min(0.5, win.width / (2 * scaledW));
+    const fyHalf = Math.min(0.5, win.height / (2 * scaledH));
+
     dragRef.current = {
       slotIndex,
       startX: e.clientX,
@@ -48,6 +56,8 @@ export default function PreviewPane({ recipe, library, previewUrl, loading, erro
       focal0: { ...slot.focal },
       scaledW,
       scaledH,
+      fxHalf,
+      fyHalf,
     };
     setDraggingSlot(slotIndex);
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -59,8 +69,8 @@ export default function PreviewPane({ recipe, library, previewUrl, loading, erro
     const dxRef = (e.clientX - drag.startX) / dispScale;
     const dyRef = (e.clientY - drag.startY) / dispScale;
     onFocalChange(drag.slotIndex, {
-      x: clamp(drag.focal0.x - dxRef / drag.scaledW, 0, 1),
-      y: clamp(drag.focal0.y - dyRef / drag.scaledH, 0, 1),
+      x: clamp(drag.focal0.x - dxRef / drag.scaledW, drag.fxHalf, 1 - drag.fxHalf),
+      y: clamp(drag.focal0.y - dyRef / drag.scaledH, drag.fyHalf, 1 - drag.fyHalf),
     });
   };
 

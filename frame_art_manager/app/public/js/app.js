@@ -8077,6 +8077,19 @@ function openImageModal(filename) {
   
   renderModalResolutionFromMetadata(imageData);
 
+  // Collages re-open in the React builder for layout edits (recipe stored
+  // in metadata as collageRecipe; the builder saves via PUT /api/collage/:id)
+  const collageEditRow = document.getElementById('modal-collage-edit');
+  if (collageEditRow) {
+    const collageEditLink = document.getElementById('modal-collage-edit-link');
+    if (imageData.collageRecipe && collageEditLink) {
+      collageEditLink.href = `collage/?edit=${encodeURIComponent(filename)}`;
+      collageEditRow.style.display = '';
+    } else {
+      collageEditRow.style.display = 'none';
+    }
+  }
+
   // Set form values
   const metadataMatte = imageData.matte || METADATA_DEFAULT_MATTE;
   const metadataFilter = imageData.filter || METADATA_DEFAULT_FILTER;

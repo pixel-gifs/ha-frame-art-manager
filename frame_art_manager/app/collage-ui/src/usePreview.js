@@ -17,8 +17,15 @@ export function usePreview(recipe) {
   const requestSeq = useRef(0);
   const currentUrl = useRef(null);
 
-  // Deep-compare via JSON: recipe objects are rebuilt on every edit.
+  useEffect(() => () => {
+    if (currentUrl.current) URL.revokeObjectURL(currentUrl.current);
+  }, []);
+
+  // Effect keyed on content, not identity: recipe objects are rebuilt on
+  // every edit, and value-equal recipes must not re-render the preview.
   const recipeKey = recipe ? JSON.stringify(recipe) : null;
+  const recipeRef = useRef(recipe);
+  recipeRef.current = recipe;
 
   useEffect(() => {
     if (!recipeKey) return undefined;
@@ -28,7 +35,7 @@ export function usePreview(recipe) {
 
     const timer = setTimeout(async () => {
       try {
-        const objectUrl = await fetchPreviewUrl(JSON.parse(recipeKey));
+        const objectUrl = await fetchPreviewUrl(recipeRef.current);
         if (seq !== requestSeq.current) {
           URL.revokeObjectURL(objectUrl);
           return;

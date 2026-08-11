@@ -22,6 +22,17 @@ function defaultSlots(imageIds) {
   return imageIds.map((imageId) => ({ imageId, focal: { x: 0.5, y: 0.5 } }));
 }
 
+/** Why ?edit=<id> can't be honored, or null when it can (or isn't in play). */
+function describeEditProblem(editId, library) {
+  if (!editId || !library) return null;
+  const entry = library[editId];
+  if (!entry) return `"${editId}" is not in the library.`;
+  if (!entry.collageRecipe) {
+    return `"${editId}" is not a collage — only collages can be re-edited.`;
+  }
+  return null;
+}
+
 export default function App() {
   const [ids] = useState(idsFromQuery);
   const [editId, setEditId] = useState(editIdFromQuery);
@@ -111,16 +122,12 @@ export default function App() {
   const applySuggestion = (suggested) => {
     setRecipe(suggested);
     setPool(suggested.slots.map((slot) => slot.imageId));
+    // A dice-roll is a new collage — never silently overwrite the one being
+    // edited with different photos. Saving after a roll POSTs a new file.
+    setEditId(null);
   };
 
-  const editEntryProblem =
-    editId && library
-      ? !library[editId]
-        ? `"${editId}" is not in the library.`
-        : !library[editId].collageRecipe
-          ? `"${editId}" is not a collage — only collages can be re-edited.`
-          : null
-      : null;
+  const editEntryProblem = describeEditProblem(editId, library);
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -181,7 +188,7 @@ export default function App() {
                 onChange={(matte) => setRecipe((cur) => ({ ...cur, matte }))}
               />
               <DicePanel allTags={allTags} onRecipe={applySuggestion} />
-              <SavePanel recipe={recipe} editId={editId} onSaved={setEditId} />
+              <SavePanel key={editId || 'new'} recipe={recipe} editId={editId} onSaved={setEditId} />
             </div>
           </div>
         )}

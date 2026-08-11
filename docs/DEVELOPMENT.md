@@ -436,6 +436,16 @@ Content-Type: application/json
 
 Picks aspect-compatible portraits from the tag pool (random template/preset when unspecified), renders, and saves unattended. `template`, `mattePreset`, and `tags` are optional. Intended for nightly HA automations. Response adds the chosen `recipe`.
 
+#### Suggest Collage (dry run)
+```http
+POST /api/collage/suggest
+Content-Type: application/json
+
+{ "tagPool": ["family"], "template": "diptych-2", "mattePreset": "ivory" }
+```
+
+Same auto-pair selection as `/auto`, but nothing is rendered or saved — the response is just `{ "recipe": { /* recipe */ } }` for the builder's dice-roll, ready to tweak and save through the normal flow. `template` and `mattePreset` are optional.
+
 ### Static Files
 
 ```http
