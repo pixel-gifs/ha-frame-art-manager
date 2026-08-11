@@ -1,0 +1,7 @@
+# Never ship host-installed deps or a stale local build; both are produced
+# inside the image build.
+app/node_modules
+app/collage-ui/node_modules
+app/collage-ui/dist
+app/test-data
+tmp-test

@@ -31,7 +31,8 @@ const testSuites = [
   { name: 'Validation Tests', file: 'validation.test.js' },
   { name: 'Collage Service Tests', file: 'collage-service.test.js' },
   { name: 'Collage Auto-Pair Tests', file: 'collage-auto.test.js' },
-  { name: 'Collage Route Tests', file: 'collage-routes.test.js' }
+  { name: 'Collage Route Tests', file: 'collage-routes.test.js' },
+  { name: 'Collage UI Route Tests', file: 'collage-ui-route.test.js' }
 ];
 
 // Results tracking

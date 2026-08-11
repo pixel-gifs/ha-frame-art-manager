@@ -2113,6 +2113,24 @@ function updateBulkActionsBar(totalSelectableCount) {
   } else {
     bulkActions.classList.remove('visible');
   }
+
+  const collageBtn = document.getElementById('bulk-collage-btn');
+  if (collageBtn) {
+    collageBtn.disabled = !isCollageSelectionSize(selectedImages.size);
+  }
+}
+
+// The collage builder takes 2-4 images (see issue #1 templates)
+function isCollageSelectionSize(count) {
+  return count >= 2 && count <= 4;
+}
+
+// Open the React collage builder with the current selection. Relative URL
+// keeps the HA ingress prefix intact.
+function openCollageBuilder() {
+  const ids = Array.from(selectedImages);
+  if (!isCollageSelectionSize(ids.length)) return;
+  window.location.href = `collage/?ids=${ids.map(encodeURIComponent).join(',')}`;
 }
 
 function clearSelection() {
@@ -8719,6 +8737,10 @@ function initBulkActions() {
   
   if (bulkTagBtn) {
     bulkTagBtn.addEventListener('click', openBulkTagModal);
+  }
+  const collageBtn = document.getElementById('bulk-collage-btn');
+  if (collageBtn) {
+    collageBtn.addEventListener('click', openCollageBuilder);
   }
   if (bulkDeleteBtn) {
     bulkDeleteBtn.addEventListener('click', deleteBulkImages);

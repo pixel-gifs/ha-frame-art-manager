@@ -54,6 +54,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/library', express.static(path.join(FRAME_ART_PATH, 'library')));
 app.use('/thumbs', express.static(path.join(FRAME_ART_PATH, 'thumbs')));
 
+// Serve the built collage builder (React app) at /collage
+const { mountCollageUi } = require('./collage_ui');
+mountCollageUi(app);
+
 // Make FRAME_ART_PATH available to all routes
 app.use((req, res, next) => {
   req.frameArtPath = FRAME_ART_PATH;
