@@ -1,0 +1,135 @@
+/**
+ * Client-side port of the pure layout geometry in ../../collage_service.js.
+ *
+ * The builder needs the exact window rects (template thumbnails, focal-drag
+ * overlays) and the exact cover-crop math (converting a pointer drag into a
+ * focal delta) without a round-trip per pointermove. Keep this file in
+ * lockstep with collage_service.js — tests/collage-geometry-parity.test.js
+ * cross-checks both implementations and fails on drift.
+ */
+
+export const CANVAS = { width: 3840, height: 2160 };
+
+export const BORDER_WIDTH = { min: 0, max: 400, default: 120 };
+
+// Window order matters: slot[i] renders into windows[i].
+export const TEMPLATES = {
+  'diptych-2': { label: '2-Up Diptych', slotCount: 2 },
+  'triptych-3': { label: '3-Up Triptych', slotCount: 3 },
+  'grid-2x2': { label: '2x2 Grid', slotCount: 4 },
+  'hero-left': { label: 'Hero + 2 Stack', slotCount: 3 }
+};
+
+// UI-facing subset of the server's matte presets: label for the picker,
+// matteColor for the swatch. Render params live server-side only.
+export const MATTE_PRESETS = {
+  'gallery-white': { label: 'Gallery White', matteColor: '#f4f1ea' },
+  ivory: { label: 'Ivory', matteColor: '#f1e9d6' },
+  'museum-black': { label: 'Museum Black', matteColor: '#131311' }
+};
+
+export function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+export function toUnit(value, fallback) {
+  const num = Number(value);
+  return Number.isFinite(num) ? clamp(num, 0, 1) : fallback;
+}
+
+/**
+ * Split a content span into `fractions.length` windows separated by gutters.
+ * The last window absorbs rounding so the far edge lands exactly on the margin.
+ */
+function splitSpan(start, total, gutter, fractions) {
+  const content = total - gutter * (fractions.length - 1);
+  const spans = [];
+  let cursor = start;
+  let used = 0;
+  for (let i = 0; i < fractions.length; i++) {
+    const size = i === fractions.length - 1
+      ? content - used
+      : Math.round(content * fractions[i]);
+    spans.push({ start: cursor, size });
+    cursor += size + gutter;
+    used += size;
+  }
+  return spans;
+}
+
+/**
+ * Compute matte window rects for a template. All values in output pixels.
+ * borderWidth is at 4K reference scale; `scale` shrinks the whole layout
+ * uniformly (e.g. 0.25 for a 960px preview).
+ */
+export function computeLayout(template, borderWidth, scale = 1) {
+  if (!TEMPLATES[template]) {
+    throw new Error(`Unknown collage template "${template}"`);
+  }
+
+  const width = Math.round(CANVAS.width * scale);
+  const height = Math.round(CANVAS.height * scale);
+  const m = Math.round(clamp(Number(borderWidth) || 0, BORDER_WIDTH.min, BORDER_WIDTH.max) * scale);
+  const g = m; // one knob: gutters track the outer border
+
+  const contentX = m;
+  const contentY = m;
+  const contentW = width - 2 * m;
+  const contentH = height - 2 * m;
+
+  const windows = [];
+
+  const pushGrid = (colFractions, rowFractions) => {
+    const cols = splitSpan(contentX, contentW, g, colFractions);
+    const rows = splitSpan(contentY, contentH, g, rowFractions);
+    for (const row of rows) {
+      for (const col of cols) {
+        windows.push({ left: col.start, top: row.start, width: col.size, height: row.size });
+      }
+    }
+  };
+
+  switch (template) {
+    case 'diptych-2':
+      pushGrid([0.5, 0.5], [1]);
+      break;
+    case 'triptych-3':
+      pushGrid([1 / 3, 1 / 3, 1 / 3], [1]);
+      break;
+    case 'grid-2x2':
+      pushGrid([0.5, 0.5], [0.5, 0.5]);
+      break;
+    case 'hero-left': {
+      const cols = splitSpan(contentX, contentW, g, [0.6, 0.4]);
+      const rows = splitSpan(contentY, contentH, g, [0.5, 0.5]);
+      windows.push({ left: cols[0].start, top: contentY, width: cols[0].size, height: contentH });
+      windows.push({ left: cols[1].start, top: rows[0].start, width: cols[1].size, height: rows[0].size });
+      windows.push({ left: cols[1].start, top: rows[1].start, width: cols[1].size, height: rows[1].size });
+      break;
+    }
+  }
+
+  return windows;
+}
+
+/**
+ * Fill-and-crop fitting: scale the source to cover the window, then pick the
+ * window-sized crop centered on the focal point (clamped to stay in bounds).
+ */
+export function computeCoverCrop(srcW, srcH, winW, winH, focal = {}) {
+  if (!srcW || !srcH || !winW || !winH) {
+    throw new Error('computeCoverCrop requires positive source and window dimensions');
+  }
+
+  const scale = Math.max(winW / srcW, winH / srcH);
+  const scaledW = Math.max(winW, Math.round(srcW * scale));
+  const scaledH = Math.max(winH, Math.round(srcH * scale));
+
+  const fx = toUnit(focal.x, 0.5);
+  const fy = toUnit(focal.y, 0.5);
+
+  const left = clamp(Math.round(fx * scaledW - winW / 2), 0, scaledW - winW);
+  const top = clamp(Math.round(fy * scaledH - winH / 2), 0, scaledH - winH);
+
+  return { scaledW, scaledH, left, top };
+}

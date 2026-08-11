@@ -201,6 +201,23 @@ router.post('/auto', async (req, res) => {
   }
 });
 
+// POST /api/collage/suggest — dry-run auto-pair for the builder's dice-roll:
+// same selection logic as /auto, but only returns the recipe (no render, no
+// save) so the user can tweak it before committing.
+router.post('/suggest', async (req, res) => {
+  try {
+    const { tagPool, template, mattePreset } = req.body || {};
+
+    const helper = new MetadataHelper(req.frameArtPath);
+    const metadata = await helper.readMetadata();
+
+    const recipe = buildAutoRecipe({ images: metadata.images, tagPool, template, mattePreset });
+    res.json({ recipe });
+  } catch (error) {
+    sendError(res, error, 'Failed to suggest collage');
+  }
+});
+
 // PUT /api/collage/:imageId — re-render an existing collage in place
 router.put('/:imageId', async (req, res) => {
   try {

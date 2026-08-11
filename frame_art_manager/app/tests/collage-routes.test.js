@@ -279,6 +279,64 @@ test('auto returns 400 when the pool has too few compatible portraits', async ()
   assert.match(body.error, /Not enough/);
 });
 
+// --- POST /api/collage/suggest ---
+
+test('suggest returns a renderable recipe without saving anything', async () => {
+  const imagesBefore = Object.keys((await readMetadata()).images);
+  const libraryBefore = await fs.readdir(path.join(frameArtPath, 'library'));
+
+  const res = await postJson('/api/collage/suggest', {
+    tagPool: ['family'],
+    template: 'diptych-2',
+    mattePreset: 'ivory'
+  });
+  assert.strictEqual(res.status, 200);
+  const body = await res.json();
+  assert.ok(body.recipe, 'response must include a recipe');
+  assert.strictEqual(body.recipe.template, 'diptych-2');
+  assert.strictEqual(body.recipe.matte.preset, 'ivory');
+  assert.strictEqual(body.recipe.slots.length, 2);
+  body.recipe.slots.forEach(slot => {
+    assert.ok(
+      ['portrait-a.jpg', 'portrait-b.jpg', 'portrait-c.jpg'].includes(slot.imageId),
+      `unexpected slot image ${slot.imageId}`
+    );
+    assert.deepStrictEqual(slot.focal, { x: 0.5, y: 0.5 });
+  });
+
+  // Dry run: no new metadata entry, no new library file
+  const imagesAfter = Object.keys((await readMetadata()).images);
+  assert.deepStrictEqual(imagesAfter, imagesBefore, 'suggest must not register images');
+  const libraryAfter = await fs.readdir(path.join(frameArtPath, 'library'));
+  assert.deepStrictEqual(libraryAfter, libraryBefore, 'suggest must not write library files');
+});
+
+test('suggest works with only a tagPool (random template + preset)', async () => {
+  const res = await postJson('/api/collage/suggest', { tagPool: ['family'] });
+  assert.strictEqual(res.status, 200);
+  const body = await res.json();
+  assert.ok(body.recipe.template, 'recipe must have a template');
+  assert.ok(body.recipe.matte.preset, 'recipe must have a matte preset');
+  assert.ok(body.recipe.slots.length >= 2);
+});
+
+test('suggest rejects a missing tagPool with 400', async () => {
+  const res = await postJson('/api/collage/suggest', {});
+  assert.strictEqual(res.status, 400);
+  const body = await res.json();
+  assert.match(body.error, /tagPool/);
+});
+
+test('suggest returns 400 when the pool has too few compatible portraits', async () => {
+  const res = await postJson('/api/collage/suggest', {
+    tagPool: ['hawaii'],
+    template: 'grid-2x2'
+  });
+  assert.strictEqual(res.status, 400);
+  const body = await res.json();
+  assert.match(body.error, /Not enough/);
+});
+
 async function runTests() {
   let passed = 0;
   let failed = 0;
