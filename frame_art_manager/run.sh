@@ -135,11 +135,27 @@ if git -C "${FRAME_ART_PATH}" rev-parse --is-inside-work-tree >/dev/null 2>&1; t
     fi
 fi
 
+# Git automation flags. The server treats anything other than the literal string
+# "false" as enabled, so map the add-on booleans (default: off — this fork's
+# library is a local-only repo with no remote) to explicit true/false strings.
+GIT_AUTO_PULL=$(bashio::config 'git_auto_pull_on_startup')
+GIT_AUTO_PUSH=$(bashio::config 'git_auto_push_on_change')
+if [ "${GIT_AUTO_PULL}" != "true" ]; then
+    GIT_AUTO_PULL="false"
+fi
+if [ "${GIT_AUTO_PUSH}" != "true" ]; then
+    GIT_AUTO_PUSH="false"
+fi
+bashio::log.info "Git auto-pull on startup: ${GIT_AUTO_PULL}"
+bashio::log.info "Git auto-push on change: ${GIT_AUTO_PUSH}"
+
 # Export environment variables for Node.js app
 export FRAME_ART_PATH="${FRAME_ART_PATH}"
 export PORT="${PORT}"
 export FRAME_ART_HOME="${HOME_NAME}"
 export NODE_ENV="production"
+export GIT_AUTO_PULL_ON_STARTUP="${GIT_AUTO_PULL}"
+export GIT_AUTO_PUSH_ON_CHANGE="${GIT_AUTO_PUSH}"
 
 # Change to app directory
 cd /app || bashio::exit.nok "Could not change to app directory"

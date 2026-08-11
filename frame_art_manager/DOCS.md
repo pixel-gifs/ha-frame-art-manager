@@ -35,6 +35,10 @@ The web interface has 4 main areas:
 - **Tags**: Manage your tag library
 - **Advanced**: System information and settings (including metadata viewer and sync details)
 
+> **Fork note:** This fork installs alongside the original billyfw add-on (different
+> repository, same slug — Home Assistant treats them as separate add-ons). Both map host
+> port 8099, so stop the original add-on before starting this one.
+
 ## Configuration
 
 ### Home Label (Optional)
@@ -48,7 +52,8 @@ To enable Git synchronization of your frame art library:
 1. Go to **Settings** → **Add-ons** → **Frame Art Manager** → **Configuration**
 2. Paste your SSH private key in the `ssh_private_key` field
 3. Set `git_remote_host_alias` to match your Git remote host (default: `github-billy`)
-4. Save and restart the add-on
+4. Enable `git_auto_pull_on_startup` and/or `git_auto_push_on_change` (both default to **off** in this fork — the library is expected to be a local-only git repo with no remote)
+5. Save and restart the add-on
 
 **To get your SSH private key:**
 - From Terminal & SSH add-on: `cat ~/.ssh/id_ed25519`
@@ -64,8 +69,8 @@ To enable Git synchronization of your frame art library:
 
 ## Support
 
-- **GitHub**: https://github.com/billyfw/ha-frame-art-manager
-- **Issues**: https://github.com/billyfw/ha-frame-art-manager/issues
+- **GitHub**: https://github.com/pixel-gifs/ha-frame-art-manager
+- **Issues**: https://github.com/pixel-gifs/ha-frame-art-manager/issues
 - **Full Documentation**: See the GitHub repository for detailed usage instructions
 
 ## Version

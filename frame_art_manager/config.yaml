@@ -1,9 +1,9 @@
 # Frame Art Manager Add-on Configuration
-name: Frame Art Manager
-version: "1.25.11"
+name: Frame Art Manager (Collage Fork)
+version: "1.26.0"
 slug: frame_art_manager
-description: Manage Frame TV artwork library
-url: https://github.com/billyfw/ha-frame-art-manager
+description: Manage Frame TV artwork library with multi-photo collage compositing
+url: https://github.com/pixel-gifs/ha-frame-art-manager
 arch:
   - aarch64
   - amd64
@@ -17,11 +17,15 @@ options:
   frame_art_path: /config/www/frame_art
   port: 8099
   git_remote_host_alias: "github-billy"
+  git_auto_pull_on_startup: false
+  git_auto_push_on_change: false
   ssh_private_key: []
 schema:
   frame_art_path: str
   port: int
   git_remote_host_alias: str?
+  git_auto_pull_on_startup: bool?
+  git_auto_push_on_change: bool?
   ssh_private_key:
     - str?
 map:
