@@ -1,5 +1,26 @@
 # CLAUDE.md — ha-frame-art-manager
 
+> **Fork note (pixel-gifs):** This is a fork of `billyfw/ha-frame-art-manager`. Everything
+> below "System map" is the upstream author's doc — their local paths (`~/devprojects/…`),
+> their Fly.io deployment, and their library repo do NOT exist in this environment. Treat
+> it as codebase intel, not as instructions for this machine. This fork's goal: a
+> multi-photo collage compositor (diptych/triptych/grid with shadowbox matting) for
+> portrait-heavy libraries, targeting the 3840x2160 Frame TV canvas.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live on GitHub at `pixel-gifs/ha-frame-art-manager` (this fork, via the `gh` CLI — never the upstream repo). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default label vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root (created lazily). See `docs/agents/domain.md`.
+
 Web app for managing the Samsung Frame TV art library (gallery, upload, tagging, git
 sync). Historically packaged as a Home Assistant add-on; **currently migrating to a single
 central instance on Fly.io** — read `docs/MULTI_HOME_PLAN.md` FIRST before any
