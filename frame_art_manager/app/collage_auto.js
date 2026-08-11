@@ -44,14 +44,14 @@ function cropRetention(imageAspect, windowAspect) {
  * Returns [{ imageId, aspect }].
  */
 function poolCandidates(images, tagPool) {
-  const pool = tagPool.map(tag => String(tag).trim()).filter(Boolean);
+  const pool = tagPool.map(tag => String(tag).trim().toLowerCase()).filter(Boolean);
   return Object.entries(images || {})
     .filter(([, entry]) => entry && !entry.collageRecipe)
     .map(([imageId, entry]) => ({ imageId, entry, aspect: entryAspect(entry) }))
     .filter(({ entry, aspect }) => {
       if (!aspect || aspect >= 1) return false; // portraits only
       const tags = Array.isArray(entry.tags) ? entry.tags : [];
-      return tags.some(tag => pool.includes(tag));
+      return tags.some(tag => pool.includes(String(tag).toLowerCase()));
     })
     .map(({ imageId, aspect }) => ({ imageId, aspect }));
 }

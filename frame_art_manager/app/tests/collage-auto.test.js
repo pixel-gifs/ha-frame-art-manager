@@ -123,6 +123,17 @@ test('random template choice only considers templates the pool can fill', () => 
   }
 });
 
+test('tagPool matching is case-insensitive', () => {
+  const recipe = buildAutoRecipe({
+    images: sampleImages(), // tagged 'family'
+    tagPool: ['FAMILY'],
+    template: 'diptych-2',
+    mattePreset: 'gallery-white',
+    rng: seededRng()
+  });
+  assert.strictEqual(recipe.slots.length, 2);
+});
+
 test('same rng seed produces the same recipe', () => {
   const a = buildAutoRecipe({ images: sampleImages(), tagPool: ['family'], rng: seededRng(7) });
   const b = buildAutoRecipe({ images: sampleImages(), tagPool: ['family'], rng: seededRng(7) });
