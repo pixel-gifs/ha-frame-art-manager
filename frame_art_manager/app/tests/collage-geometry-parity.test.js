@@ -43,17 +43,37 @@ test('client canvas and border bounds match the server', () => {
   assert.deepStrictEqual(client.BORDER_WIDTH, server.BORDER_WIDTH);
 });
 
-test('computeLayout agrees across every template, border width and scale', () => {
+test('client depth styles, textures and solo aspects match the server', () => {
+  assert.deepStrictEqual(client.DEPTH_STYLES, server.DEPTH_STYLES);
+  assert.deepStrictEqual(client.TEXTURES, server.TEXTURES);
+  assert.deepStrictEqual(client.SOLO_WINDOW_ASPECT, server.SOLO_WINDOW_ASPECT);
+});
+
+test('soloOrientation agrees across aspect ratios including square', () => {
+  const dims = [[600, 900], [900, 600], [1000, 1000], [3024, 4032], [4032, 3024]];
+  for (const [w, h] of dims) {
+    assert.strictEqual(
+      client.soloOrientation(w, h),
+      server.soloOrientation(w, h),
+      `orientation mismatch for ${w}x${h}`
+    );
+  }
+});
+
+test('computeLayout agrees across every template, border width, scale and orientation', () => {
   const borders = [0, 40, 120, 250, 400];
   const scales = [1, 0.25, 960 / 3840];
+  const orientations = [undefined, 'portrait', 'landscape'];
   for (const template of Object.keys(server.TEMPLATES)) {
     for (const border of borders) {
       for (const scale of scales) {
-        assert.deepStrictEqual(
-          client.computeLayout(template, border, scale),
-          server.computeLayout(template, border, scale),
-          `layout mismatch: ${template} border=${border} scale=${scale}`
-        );
+        for (const orientation of orientations) {
+          assert.deepStrictEqual(
+            client.computeLayout(template, border, scale, orientation),
+            server.computeLayout(template, border, scale, orientation),
+            `layout mismatch: ${template} border=${border} scale=${scale} orientation=${orientation}`
+          );
+        }
       }
     }
   }

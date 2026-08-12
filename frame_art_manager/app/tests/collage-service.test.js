@@ -10,6 +10,10 @@ const {
   CANVAS,
   TEMPLATES,
   MATTE_PRESETS,
+  DEPTH_STYLES,
+  TEXTURES,
+  SOLO_WINDOW_ASPECT,
+  soloOrientation,
   normalizeRecipe,
   computeLayout,
   computeCoverCrop,
@@ -163,6 +167,33 @@ test('computeLayout throws on unknown template', () => {
   assert.throws(() => computeLayout('mosaic-9', 120), /template/i);
 });
 
+test('computeLayout solo portrait: one centered 3:4 window spanning content height', () => {
+  const windows = computeLayout('solo', 120, 1, 'portrait');
+  assert.strictEqual(windows.length, 1);
+  const [win] = windows;
+  assert.strictEqual(win.height, CANVAS.height - 240);
+  assert.strictEqual(win.width, Math.round(win.height * SOLO_WINDOW_ASPECT.portrait));
+  // Centered horizontally: equal matte on both sides (±1 rounding)
+  const rightGap = CANVAS.width - 120 - (win.left + win.width);
+  assert.ok(Math.abs((win.left - 120) - rightGap) <= 1, `off-center: left=${win.left} rightGap=${rightGap}`);
+  assert.ok(win.height > win.width);
+});
+
+test('computeLayout solo landscape: wider-than-tall 4:3 window; portrait is the default', () => {
+  const landscape = computeLayout('solo', 120, 1, 'landscape')[0];
+  assert.strictEqual(landscape.width, Math.round(landscape.height * SOLO_WINDOW_ASPECT.landscape));
+  assert.ok(landscape.width > landscape.height);
+
+  const defaulted = computeLayout('solo', 120)[0];
+  assert.deepStrictEqual(defaulted, computeLayout('solo', 120, 1, 'portrait')[0]);
+});
+
+test('soloOrientation maps aspect to window variant, square counts as portrait', () => {
+  assert.strictEqual(soloOrientation(3024, 4032), 'portrait');
+  assert.strictEqual(soloOrientation(4032, 3024), 'landscape');
+  assert.strictEqual(soloOrientation(1000, 1000), 'portrait');
+});
+
 // --- Cover crop / focal math ---
 
 test('computeCoverCrop scales source to cover the window', () => {
@@ -211,6 +242,35 @@ test('normalizeRecipe fills defaults for focal, preset, and borderWidth', () => 
   assert.strictEqual(normalized.matte.preset, 'gallery-white');
   assert.strictEqual(typeof normalized.matte.borderWidth, 'number');
   assert.deepStrictEqual(normalized.slots[0].focal, { x: 0.5, y: 0.5 });
+});
+
+test('normalizeRecipe defaults depthStyle to miter and texture to none', () => {
+  const normalized = normalizeRecipe(makeRecipe());
+  assert.strictEqual(normalized.matte.depthStyle, 'miter');
+  assert.strictEqual(normalized.matte.texture, 'none');
+});
+
+test('normalizeRecipe accepts every depth style and texture', () => {
+  for (const depthStyle of DEPTH_STYLES) {
+    for (const texture of TEXTURES) {
+      const normalized = normalizeRecipe(makeRecipe({
+        matte: { preset: 'ivory', borderWidth: 120, depthStyle, texture }
+      }));
+      assert.strictEqual(normalized.matte.depthStyle, depthStyle);
+      assert.strictEqual(normalized.matte.texture, texture);
+    }
+  }
+});
+
+test('normalizeRecipe rejects unknown depth styles and textures', () => {
+  assert.throws(
+    () => normalizeRecipe(makeRecipe({ matte: { depthStyle: 'chamfer' } })),
+    /depth style/i
+  );
+  assert.throws(
+    () => normalizeRecipe(makeRecipe({ matte: { texture: 'burlap' } })),
+    /texture/i
+  );
 });
 
 test('normalizeRecipe clamps focal and borderWidth into range', () => {
@@ -384,6 +444,100 @@ test('INTEGRATION: identical recipe and sources render byte-identical output', a
 
   const first = await renderPreview(makeRecipe(), sources);
   const second = await renderPreview(makeRecipe(), sources);
+  assert.ok(first.buffer.equals(second.buffer), 'renders should be deterministic');
+});
+
+test('INTEGRATION: all depth treatments render on light and dark mattes', async () => {
+  const a = await createSampleImage('a.jpg', 1200, 1600, { r: 200, g: 40, b: 40 });
+  const b = await createSampleImage('b.jpg', 1600, 1200, { r: 40, g: 200, b: 40 });
+  const sources = { 'a.jpg': a, 'b.jpg': b };
+
+  const outputs = {};
+  for (const preset of ['gallery-white', 'museum-black']) {
+    for (const depthStyle of DEPTH_STYLES) {
+      const { buffer } = await renderPreview(
+        makeRecipe({ matte: { preset, borderWidth: 120, depthStyle } }),
+        sources
+      );
+      const meta = await sharp(buffer).metadata();
+      assert.strictEqual(meta.width, 960, `${preset}/${depthStyle} width`);
+      assert.strictEqual(meta.height, 540, `${preset}/${depthStyle} height`);
+      outputs[`${preset}/${depthStyle}`] = buffer;
+    }
+    // The treatments must actually look different from each other
+    assert.ok(
+      !outputs[`${preset}/miter`].equals(outputs[`${preset}/recess`]),
+      `${preset}: recess should differ from miter`
+    );
+    assert.ok(
+      !outputs[`${preset}/miter`].equals(outputs[`${preset}/double`]),
+      `${preset}: double should differ from miter`
+    );
+  }
+});
+
+test('INTEGRATION: fibre and weave textures modulate the matte, none leaves it flat', async () => {
+  const a = await createSampleImage('a.jpg', 1200, 1600, { r: 200, g: 40, b: 40 });
+  const b = await createSampleImage('b.jpg', 1600, 1200, { r: 40, g: 200, b: 40 });
+  const sources = { 'a.jpg': a, 'b.jpg': b };
+
+  const rendered = {};
+  for (const texture of TEXTURES) {
+    const { buffer } = await renderPreview(
+      makeRecipe({ matte: { preset: 'gallery-white', borderWidth: 120, texture } }),
+      sources
+    );
+    rendered[texture] = buffer;
+  }
+
+  assert.ok(!rendered.none.equals(rendered.fibre), 'fibre should change the render');
+  assert.ok(!rendered.none.equals(rendered.weave), 'weave should change the render');
+  assert.ok(!rendered.fibre.equals(rendered.weave), 'fibre and weave should differ');
+});
+
+test('INTEGRATION: solo template picks the window orientation from the source', async () => {
+  const portrait = await createSampleImage('p.jpg', 1200, 1600, { r: 60, g: 80, b: 180 });
+  const landscape = await createSampleImage('l.jpg', 1600, 1200, { r: 60, g: 80, b: 180 });
+
+  for (const [imageId, filePath, orientation] of [
+    ['p.jpg', portrait, 'portrait'],
+    ['l.jpg', landscape, 'landscape']
+  ]) {
+    const recipe = {
+      template: 'solo',
+      matte: { preset: 'gallery-white', borderWidth: 120 },
+      slots: [{ imageId, focal: { x: 0.5, y: 0.5 } }]
+    };
+    const { buffer } = await renderPreview(recipe, { [imageId]: filePath });
+
+    const raw = await sharp(buffer).raw().toBuffer({ resolveWithObject: true });
+    const win = computeLayout('solo', 120, 960 / CANVAS.width, orientation)[0];
+    const cx = win.left + Math.floor(win.width / 2);
+    const cy = win.top + Math.floor(win.height / 2);
+    const i = (cy * raw.info.width + cx) * raw.info.channels;
+    // Blue-ish photo pixel at the expected window center for this orientation
+    assert.ok(
+      raw.data[i + 2] > raw.data[i] && raw.data[i + 2] > 120,
+      `${orientation}: expected photo pixel at window center, got ` +
+      `[${raw.data[i]}, ${raw.data[i + 1]}, ${raw.data[i + 2]}]`
+    );
+    // Just inside the canvas edge, past the border, sits matte (not photo):
+    // solo windows leave wide matte flanks
+    const j = (cy * raw.info.width + Math.floor(win.left / 2)) * raw.info.channels;
+    assert.ok(raw.data[j] > 200, `${orientation}: expected matte at window flank`);
+  }
+});
+
+test('INTEGRATION: treatment + texture recipes render byte-identical across runs', async () => {
+  const a = await createSampleImage('a.jpg', 1200, 1600, { r: 200, g: 40, b: 40 });
+  const b = await createSampleImage('b.jpg', 1600, 1200, { r: 40, g: 200, b: 40 });
+  const sources = { 'a.jpg': a, 'b.jpg': b };
+  const recipe = makeRecipe({
+    matte: { preset: 'museum-black', borderWidth: 120, depthStyle: 'double', texture: 'weave' }
+  });
+
+  const first = await renderPreview(recipe, sources);
+  const second = await renderPreview(recipe, sources);
   assert.ok(first.buffer.equals(second.buffer), 'renders should be deterministic');
 });
 

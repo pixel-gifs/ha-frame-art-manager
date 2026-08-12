@@ -123,6 +123,27 @@ test('random template choice only considers templates the pool can fill', () => 
   }
 });
 
+test('random template choice never picks solo (explicit solo still works)', () => {
+  // A single portrait candidate could only fill solo — random choice must
+  // refuse rather than degrade to a 1-up (that routing is #10's job).
+  const images = { 'a.jpg': portraitEntry(['family']) };
+  assert.throws(
+    () => buildAutoRecipe({ images, tagPool: ['family'], rng: seededRng() }),
+    /Not enough aspect-compatible portrait images/
+  );
+
+  const recipe = buildAutoRecipe({
+    images,
+    tagPool: ['family'],
+    template: 'solo',
+    mattePreset: 'gallery-white',
+    rng: seededRng()
+  });
+  assert.strictEqual(recipe.template, 'solo');
+  assert.strictEqual(recipe.slots.length, 1);
+  assert.strictEqual(recipe.slots[0].imageId, 'a.jpg');
+});
+
 test('tagPool matching is case-insensitive', () => {
   const recipe = buildAutoRecipe({
     images: sampleImages(), // tagged 'family'

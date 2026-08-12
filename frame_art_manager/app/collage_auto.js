@@ -102,13 +102,16 @@ function buildAutoRecipe({ images, tagPool, template, mattePreset, rng = Math.ra
 
   const candidates = poolCandidates(images, tagPool);
 
-  const templateKeys = template ? [template] : Object.keys(TEMPLATES);
+  // Random choice never picks solo: 1-up routing is #10's aspect-aware
+  // fill; until then solo must be requested explicitly.
+  const autoKeys = Object.keys(TEMPLATES).filter(key => key !== 'solo');
+  const templateKeys = template ? [template] : autoKeys;
   const feasible = templateKeys
     .map(key => ({ key, eligible: compatibleCandidates(candidates, key) }))
     .filter(({ key, eligible }) => eligible.length >= TEMPLATES[key].slotCount);
 
   if (feasible.length === 0) {
-    const need = template ? TEMPLATES[template].slotCount : Math.min(...Object.values(TEMPLATES).map(t => t.slotCount));
+    const need = template ? TEMPLATES[template].slotCount : Math.min(...autoKeys.map(key => TEMPLATES[key].slotCount));
     throw badRequest(
       `Not enough aspect-compatible portrait images tagged [${tagPool.join(', ')}] ` +
       `(need at least ${need}, found ${candidates.length} portrait candidates)`

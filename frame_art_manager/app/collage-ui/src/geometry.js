@@ -17,8 +17,23 @@ export const TEMPLATES = {
   'diptych-2': { label: '2-Up Diptych', slotCount: 2 },
   'triptych-3': { label: '3-Up Triptych', slotCount: 3 },
   'grid-2x2': { label: '2x2 Grid', slotCount: 4 },
-  'hero-left': { label: 'Hero + 2 Stack', slotCount: 3 }
+  'hero-left': { label: 'Hero + 2 Stack', slotCount: 3 },
+  solo: { label: 'Solo', slotCount: 1 }
 };
+
+// Bevel depth treatments and matte textures (render params live server-side;
+// these lists drive the pickers and must match the server's).
+export const DEPTH_STYLES = ['miter', 'recess', 'double'];
+export const TEXTURES = ['none', 'fibre', 'weave'];
+
+// The solo template picks its single window's aspect from the source photo's
+// orientation: portrait sources get a 3:4 window, landscape a 4:3 window.
+export const SOLO_WINDOW_ASPECT = { portrait: 3 / 4, landscape: 4 / 3 };
+
+/** Orientation the solo template should use for a source of these dimensions. */
+export function soloOrientation(width, height) {
+  return width > height ? 'landscape' : 'portrait';
+}
 
 // UI-facing subset of the server's matte presets: label for the picker,
 // matteColor for the swatch. Render params live server-side only.
@@ -60,9 +75,10 @@ function splitSpan(start, total, gutter, fractions) {
 /**
  * Compute matte window rects for a template. All values in output pixels.
  * borderWidth is at 4K reference scale; `scale` shrinks the whole layout
- * uniformly (e.g. 0.25 for a 960px preview).
+ * uniformly (e.g. 0.25 for a 960px preview). `orientation` only affects the
+ * solo template ('portrait' | 'landscape'; anything else means portrait).
  */
-export function computeLayout(template, borderWidth, scale = 1) {
+export function computeLayout(template, borderWidth, scale = 1, orientation = 'portrait') {
   if (!TEMPLATES[template]) {
     throw new Error(`Unknown collage template "${template}"`);
   }
@@ -105,6 +121,18 @@ export function computeLayout(template, borderWidth, scale = 1) {
       windows.push({ left: cols[0].start, top: contentY, width: cols[0].size, height: contentH });
       windows.push({ left: cols[1].start, top: rows[0].start, width: cols[1].size, height: rows[0].size });
       windows.push({ left: cols[1].start, top: rows[1].start, width: cols[1].size, height: rows[1].size });
+      break;
+    }
+    case 'solo': {
+      const aspect = SOLO_WINDOW_ASPECT[orientation === 'landscape' ? 'landscape' : 'portrait'];
+      const winH = contentH;
+      const winW = Math.min(contentW, Math.round(winH * aspect));
+      windows.push({
+        left: contentX + Math.round((contentW - winW) / 2),
+        top: contentY,
+        width: winW,
+        height: winH
+      });
       break;
     }
   }

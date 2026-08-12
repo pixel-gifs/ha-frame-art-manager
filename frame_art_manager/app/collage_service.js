@@ -1,25 +1,35 @@
 const fs = require('fs').promises;
+const path = require('path');
 const sharp = require('sharp');
 const heicConvert = require('heic-convert');
 
 /**
- * Collage render engine: composites 2-4 library images into a single
- * 3840x2160 Frame TV canvas with shadowbox matting (matte board, bevel,
- * inner shadow, drop shadow).
+ * Collage render engine: composites 1-4 library images into a single
+ * 3840x2160 Frame TV canvas with shadowbox matting (matte board, mitered
+ * bevel, inner shadow, drop shadow, optional matte texture).
  *
  * Pure function of (recipe, source files) — no routes, no metadata access.
  * The caller resolves each slot's imageId to a file path or Buffer.
  *
  * Recipe shape:
  *   {
- *     template: 'diptych-2' | 'triptych-3' | 'grid-2x2' | 'hero-left',
- *     matte: { preset: 'gallery-white' | 'ivory' | 'museum-black', borderWidth: px },
+ *     template: 'diptych-2' | 'triptych-3' | 'grid-2x2' | 'hero-left' | 'solo',
+ *     matte: {
+ *       preset: 'gallery-white' | 'ivory' | 'museum-black',
+ *       borderWidth: px,
+ *       depthStyle: 'miter' | 'recess' | 'double',   // default 'miter'
+ *       texture: 'none' | 'fibre' | 'weave'          // default 'none'
+ *     },
  *     slots: [{ imageId, focal: { x: 0..1, y: 0..1 } }, ...]
  *   }
  *
  * All matte/shadow measurements are expressed in pixels at the 4K reference
  * canvas and scaled uniformly for preview renders, so the preview is the
  * same picture, smaller.
+ *
+ * Renders are byte-deterministic for identical (recipe, sources): textures
+ * come from fixed tiles in assets/, and no runtime randomness is used —
+ * the library dedupes by content hash.
  */
 
 const CANVAS = { width: 3840, height: 2160 };
@@ -35,16 +45,40 @@ const TEMPLATES = {
   'diptych-2': { label: '2-Up Diptych', slotCount: 2 },
   'triptych-3': { label: '3-Up Triptych', slotCount: 3 },
   'grid-2x2': { label: '2x2 Grid', slotCount: 4 },
-  'hero-left': { label: 'Hero + 2 Stack', slotCount: 3 }
+  'hero-left': { label: 'Hero + 2 Stack', slotCount: 3 },
+  solo: { label: 'Solo', slotCount: 1 }
 };
 
+// Bevel depth treatments (see #7 decision 3 / design-lab studies).
+const DEPTH_STYLES = ['miter', 'recess', 'double'];
+
+// Matte surface textures: fixed greyscale tiles in assets/ (decision 4).
+const TEXTURES = ['none', 'fibre', 'weave'];
+
+// The solo template picks its single window's aspect from the source photo's
+// orientation: portrait sources get a 3:4 window, landscape a 4:3 window
+// (both the natural phone-camera aspect, minimizing crop loss).
+const SOLO_WINDOW_ASPECT = { portrait: 3 / 4, landscape: 4 / 3 };
+
+// Depth-treatment band widths, as multiples of the swatch's bevelWidth.
+const RECESS_WIDTH_FACTOR = 1.7;
+const DOUBLE_REVEAL_FACTOR = 2.5;
+const DOUBLE_INNER_FACTOR = 0.75;
+
+// The design studies call for a "1px cut line" at their mock scale; at the
+// 4K reference canvas that reads as 2px (floors at 1px in previews).
+const CUT_LINE_WIDTH = 2;
+
+const TEXTURE_TILE_SIZE = 512;
+
 // Shadow/bevel params are px at 4K reference scale; opacities 0..1.
+// textureOpacity is the alpha the texture tile is composited at (soft-light)
+// when the recipe selects a texture.
 const MATTE_PRESETS = {
   'gallery-white': {
     label: 'Gallery White',
     matteColor: '#f4f1ea',
-    textureTint: '#e6e1d4',
-    textureOpacity: 0.05,
+    textureOpacity: 0.55,
     bevelColor: '#fdfbf5',
     bevelWidth: 12,
     bevelTopShadow: 0.18,
@@ -55,8 +89,7 @@ const MATTE_PRESETS = {
   ivory: {
     label: 'Ivory',
     matteColor: '#f1e9d6',
-    textureTint: '#e3d7bc',
-    textureOpacity: 0.06,
+    textureOpacity: 0.6,
     bevelColor: '#faf4e4',
     bevelWidth: 12,
     bevelTopShadow: 0.16,
@@ -67,8 +100,7 @@ const MATTE_PRESETS = {
   'museum-black': {
     label: 'Museum Black',
     matteColor: '#131311',
-    textureTint: '#26251f',
-    textureOpacity: 0.05,
+    textureOpacity: 0.45,
     bevelColor: '#3b3933',
     bevelTopShadow: 0.4,
     bevelBottomHighlight: 0.12,
@@ -92,21 +124,14 @@ function getTemplate(name) {
   return template;
 }
 
-// Deterministic PRNG (mulberry32) so identical (recipe, sources) renders are
-// byte-identical — the library dedupes by content hash.
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return function () {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 function toUnit(value, fallback) {
   const num = Number(value);
   return Number.isFinite(num) ? clamp(num, 0, 1) : fallback;
+}
+
+/** Orientation the solo template should use for a source of these dimensions. */
+function soloOrientation(width, height) {
+  return width > height ? 'landscape' : 'portrait';
 }
 
 /**
@@ -133,9 +158,10 @@ function splitSpan(start, total, gutter, fractions) {
 /**
  * Compute matte window rects for a template. All values in output pixels.
  * borderWidth is at 4K reference scale; `scale` shrinks the whole layout
- * uniformly (e.g. 0.25 for a 960px preview).
+ * uniformly (e.g. 0.25 for a 960px preview). `orientation` only affects the
+ * solo template ('portrait' | 'landscape'; anything else means portrait).
  */
-function computeLayout(template, borderWidth, scale = 1) {
+function computeLayout(template, borderWidth, scale = 1, orientation = 'portrait') {
   getTemplate(template);
 
   const width = Math.round(CANVAS.width * scale);
@@ -176,6 +202,18 @@ function computeLayout(template, borderWidth, scale = 1) {
       windows.push({ left: cols[0].start, top: contentY, width: cols[0].size, height: contentH });
       windows.push({ left: cols[1].start, top: rows[0].start, width: cols[1].size, height: rows[0].size });
       windows.push({ left: cols[1].start, top: rows[1].start, width: cols[1].size, height: rows[1].size });
+      break;
+    }
+    case 'solo': {
+      const aspect = SOLO_WINDOW_ASPECT[orientation === 'landscape' ? 'landscape' : 'portrait'];
+      const winH = contentH;
+      const winW = Math.min(contentW, Math.round(winH * aspect));
+      windows.push({
+        left: contentX + Math.round((contentW - winW) / 2),
+        top: contentY,
+        width: winW,
+        height: winH
+      });
       break;
     }
   }
@@ -230,6 +268,20 @@ function normalizeRecipe(recipe) {
     );
   }
 
+  const depthStyle = matte.depthStyle === undefined ? 'miter' : matte.depthStyle;
+  if (!DEPTH_STYLES.includes(depthStyle)) {
+    throw new Error(
+      `Unknown depth style "${depthStyle}". Valid styles: ${DEPTH_STYLES.join(', ')}`
+    );
+  }
+
+  const texture = matte.texture === undefined ? 'none' : matte.texture;
+  if (!TEXTURES.includes(texture)) {
+    throw new Error(
+      `Unknown texture "${texture}". Valid textures: ${TEXTURES.join(', ')}`
+    );
+  }
+
   const borderNum = Number(matte.borderWidth);
   const borderWidth = Number.isFinite(borderNum)
     ? clamp(borderNum, BORDER_WIDTH.min, BORDER_WIDTH.max)
@@ -255,7 +307,7 @@ function normalizeRecipe(recipe) {
 
   return {
     template: recipe.template,
-    matte: { preset: presetName, borderWidth },
+    matte: { preset: presetName, borderWidth, depthStyle, texture },
     slots: normalizedSlots
   };
 }
@@ -291,6 +343,30 @@ function hexToRgb(hex) {
   };
 }
 
+/**
+ * Lighten (amount > 0, toward white) or darken (amount < 0, toward black)
+ * a #rrggbb colour. All bevel-face shading derives from the swatch's bevel
+ * colour through this, so every swatch gets consistent miter lighting.
+ */
+function shade(hex, amount) {
+  const { r, g, b } = hexToRgb(hex);
+  const mix = (c) => clamp(Math.round(amount >= 0 ? c + (255 - c) * amount : c * (1 + amount)), 0, 255);
+  return `#${[mix(r), mix(g), mix(b)].map(c => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** Relative luminance 0..1 of a #rrggbb colour (for light/dark decisions). */
+function luminance(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
+
+/** The double treatment's reveal band: a near-tone of the matte colour. */
+function revealColor(preset) {
+  return luminance(preset.matteColor) > 0.5
+    ? shade(preset.matteColor, -0.07)
+    : shade(preset.matteColor, 0.12);
+}
+
 function rectPath(x, y, w, h) {
   return `M${x} ${y}h${w}v${h}h${-w}Z`;
 }
@@ -322,14 +398,82 @@ function buildDropShadowSvg(width, height, windows, preset, scale) {
   return svgDocument(width, height, body);
 }
 
+function insetRect(win, inset) {
+  return {
+    x: win.left + inset,
+    y: win.top + inset,
+    w: win.width - 2 * inset,
+    h: win.height - 2 * inset
+  };
+}
+
 /**
- * Per-window matting physics, composited after the photos:
- * inner shadow cast by the matte onto the print, then the bevel ring
- * (the cut matte-board core overlapping the print edge) with directional
- * shading — top edge in shadow, bottom edge catching light.
+ * The bands a depth treatment stacks between the matte surface and the
+ * print, outermost first. Band widths are clamped so the print never
+ * collapses to nothing.
  */
-function buildWindowEffectsSvg(width, height, windows, preset, scale) {
-  const bevel = Math.max(1, Math.round(preset.bevelWidth * scale));
+function depthBands(preset, depthStyle, scale, win) {
+  const base = Math.max(1, Math.round(preset.bevelWidth * scale));
+  const maxTotal = Math.max(1, Math.floor(Math.min(win.width, win.height) / 2) - 1);
+
+  if (depthStyle === 'double') {
+    let bevel = base;
+    let reveal = Math.max(1, Math.round(base * DOUBLE_REVEAL_FACTOR));
+    let inner = Math.max(1, Math.round(base * DOUBLE_INNER_FACTOR));
+    const total = bevel + reveal + inner;
+    if (total > maxTotal) {
+      const f = maxTotal / total;
+      bevel = Math.max(1, Math.floor(bevel * f));
+      reveal = Math.max(1, Math.floor(reveal * f));
+      inner = Math.max(1, Math.floor(inner * f));
+    }
+    return [
+      { kind: 'bevel', width: bevel },
+      { kind: 'reveal', width: reveal },
+      { kind: 'bevel', width: inner }
+    ];
+  }
+
+  const factor = depthStyle === 'recess' ? RECESS_WIDTH_FACTOR : 1;
+  const bevel = Math.min(Math.max(1, Math.round(base * factor)), maxTotal);
+  return [{ kind: 'bevel', width: bevel }];
+}
+
+/**
+ * Four mitered bevel faces between two concentric rects, as trapezoids.
+ * Uniform insets make the seams meet at 45°. Top face sits in shadow,
+ * bottom catches light (top-lit shadowbox), left/right at half strength.
+ */
+function miterFaces(outer, inner, preset) {
+  const oL = outer.x, oT = outer.y, oR = outer.x + outer.w, oB = outer.y + outer.h;
+  const iL = inner.x, iT = inner.y, iR = inner.x + inner.w, iB = inner.y + inner.h;
+  const c = preset.bevelColor;
+  const face = (points, fill) => `<polygon points="${points}" fill="${fill}"/>`;
+  return (
+    face(`${oL},${oT} ${oR},${oT} ${iR},${iT} ${iL},${iT}`, shade(c, -preset.bevelTopShadow)) +
+    face(`${oL},${oT} ${iL},${iT} ${iL},${iB} ${oL},${oB}`, shade(c, -preset.bevelTopShadow * 0.55)) +
+    face(`${oL},${oB} ${iL},${iB} ${iR},${iB} ${oR},${oB}`, shade(c, preset.bevelBottomHighlight)) +
+    face(`${oR},${oT} ${oR},${oB} ${iR},${iB} ${iR},${iT}`, shade(c, preset.bevelBottomHighlight * 0.5))
+  );
+}
+
+/** Hairline where the matte board was cut, along a rect's edge. */
+function cutLine(rect, preset, scale, opacity) {
+  const w = Math.max(1, Math.round(CUT_LINE_WIDTH * scale));
+  return (
+    `<rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" ` +
+    `fill="none" stroke="${shade(preset.bevelColor, -0.45)}" ` +
+    `stroke-opacity="${opacity}" stroke-width="${w}"/>`
+  );
+}
+
+/**
+ * Per-window matting physics, composited after the photos: the inner shadow
+ * the matte casts onto the print, then the depth treatment's bevel bands
+ * (mitered faces / reveal ring) overlapping the print edge, plus the
+ * recess treatment's top-weighted gradient and corner occlusion.
+ */
+function buildWindowEffectsSvg(width, height, windows, preset, scale, depthStyle) {
   const { opacity, blur, offsetY } = preset.innerShadow;
   const blurPx = Math.max(0.5, blur * scale);
   const dy = offsetY * scale;
@@ -339,15 +483,33 @@ function buildWindowEffectsSvg(width, height, windows, preset, scale) {
     `<filter id="is" x="-30%" y="-30%" width="160%" height="160%">` +
     `<feGaussianBlur stdDeviation="${blurPx}"/></filter>`
   ];
+
+  if (depthStyle === 'recess') {
+    const gradOpacity = clamp(opacity * 0.5, 0, 1);
+    const cornerOpacity = clamp(opacity * 0.4, 0, 1);
+    defs.push(
+      `<linearGradient id="rg" x1="0" y1="0" x2="0" y2="1">` +
+      `<stop offset="0" stop-color="#000000" stop-opacity="${gradOpacity}"/>` +
+      `<stop offset="0.55" stop-color="#000000" stop-opacity="0"/>` +
+      `<stop offset="1" stop-color="#000000" stop-opacity="0"/></linearGradient>`
+    );
+    // One radial per corner, anchored so the dark center sits on the corner.
+    const corners = { tl: [0, 0], tr: [1, 0], bl: [0, 1], br: [1, 1] };
+    for (const [id, [cx, cy]] of Object.entries(corners)) {
+      defs.push(
+        `<radialGradient id="c${id}" cx="${cx}" cy="${cy}" r="1">` +
+        `<stop offset="0" stop-color="#000000" stop-opacity="${cornerOpacity}"/>` +
+        `<stop offset="1" stop-color="#000000" stop-opacity="0"/></radialGradient>`
+      );
+    }
+  }
+
   const parts = [];
 
   windows.forEach((win, i) => {
-    const inner = {
-      x: win.left + bevel,
-      y: win.top + bevel,
-      w: win.width - 2 * bevel,
-      h: win.height - 2 * bevel
-    };
+    const bands = depthBands(preset, depthStyle, scale, win);
+    const totalInset = bands.reduce((sum, band) => sum + band.width, 0);
+    const inner = insetRect(win, totalInset);
 
     defs.push(
       `<clipPath id="win${i}"><rect x="${inner.x}" y="${inner.y}" ` +
@@ -365,49 +527,73 @@ function buildWindowEffectsSvg(width, height, windows, preset, scale) {
       `fill-opacity="${opacity}" filter="url(#is)" transform="translate(0 ${dy})"/></g>`
     );
 
-    // Bevel ring: matte-board core color overlapping the print's outer edge.
-    const ring =
-      rectPath(win.left, win.top, win.width, win.height) +
-      rectPath(inner.x, inner.y, inner.w, inner.h);
-    parts.push(`<path d="${ring}" fill-rule="evenodd" fill="${preset.bevelColor}"/>`);
+    if (depthStyle === 'recess') {
+      // Top-weighted recess gradient + corner occlusion, on the print only.
+      const c = Math.min(
+        Math.round(totalInset * 3),
+        Math.floor(Math.min(inner.w, inner.h) / 2)
+      );
+      parts.push(
+        `<g clip-path="url(#win${i})">` +
+        `<rect x="${inner.x}" y="${inner.y}" width="${inner.w}" height="${inner.h}" fill="url(#rg)"/>` +
+        `<rect x="${inner.x}" y="${inner.y}" width="${c}" height="${c}" fill="url(#ctl)"/>` +
+        `<rect x="${inner.x + inner.w - c}" y="${inner.y}" width="${c}" height="${c}" fill="url(#ctr)"/>` +
+        `<rect x="${inner.x}" y="${inner.y + inner.h - c}" width="${c}" height="${c}" fill="url(#cbl)"/>` +
+        `<rect x="${inner.x + inner.w - c}" y="${inner.y + inner.h - c}" width="${c}" height="${c}" fill="url(#cbr)"/>` +
+        `</g>`
+      );
+    }
 
-    // Directional shading on the ring: top/left recede, bottom/right catch light.
-    parts.push(
-      `<rect x="${win.left}" y="${win.top}" width="${win.width}" height="${bevel}" ` +
-      `fill="#000000" fill-opacity="${preset.bevelTopShadow}"/>`,
-      `<rect x="${win.left}" y="${win.top}" width="${bevel}" height="${win.height}" ` +
-      `fill="#000000" fill-opacity="${preset.bevelTopShadow * 0.6}"/>`,
-      `<rect x="${win.left}" y="${win.top + win.height - bevel}" width="${win.width}" height="${bevel}" ` +
-      `fill="#ffffff" fill-opacity="${preset.bevelBottomHighlight}"/>`,
-      `<rect x="${win.left + win.width - bevel}" y="${win.top}" width="${bevel}" height="${win.height}" ` +
-      `fill="#ffffff" fill-opacity="${preset.bevelBottomHighlight * 0.5}"/>`
-    );
+    // Depth bands, outermost first: mitered faces or a flat reveal ring.
+    let cursor = 0;
+    for (const band of bands) {
+      const outerRect = insetRect(win, cursor);
+      const innerRect = insetRect(win, cursor + band.width);
+      if (band.kind === 'bevel') {
+        parts.push(miterFaces(outerRect, innerRect, preset));
+      } else {
+        const ring =
+          rectPath(outerRect.x, outerRect.y, outerRect.w, outerRect.h) +
+          rectPath(innerRect.x, innerRect.y, innerRect.w, innerRect.h);
+        parts.push(`<path d="${ring}" fill-rule="evenodd" fill="${revealColor(preset)}"/>`);
+      }
+      cursor += band.width;
+    }
+
+    // Cut line where the matte surface was cut, plus a fainter one at the
+    // double treatment's inner matte cut.
+    parts.push(cutLine(insetRect(win, 0), preset, scale, 0.55));
+    if (bands.length > 1) {
+      const innerCutInset = bands[0].width + bands[1].width;
+      parts.push(cutLine(insetRect(win, innerCutInset), preset, scale, 0.35));
+    }
   });
 
   return svgDocument(width, height, `<defs>${defs.join('')}</defs>${parts.join('')}`);
 }
 
 /**
- * Subtle paper-grain texture over the matte: per-pixel noise around a
- * neutral gray biased toward the preset's texture tint, alpha-baked and
- * composited with 'overlay' so it modulates rather than covers.
+ * Load a texture tile, scaled to the render (so preview and full renders
+ * show the same weave, smaller) with the swatch's opacity baked into its
+ * alpha. Composited with tile:true + soft-light over the matte.
  */
-async function buildTextureLayer(width, height, preset) {
-  const tint = hexToRgb(preset.textureTint);
-  const alpha = Math.round(255 * clamp(preset.textureOpacity, 0, 1));
-  const channels = 4;
-  const data = Buffer.allocUnsafe(width * height * channels);
-  const random = mulberry32(0x9e3779b9 ^ (width * 31 + height));
+async function buildTextureTile(texture, preset, scale) {
+  const tilePath = path.join(__dirname, 'assets', `texture-${texture}.png`);
+  const size = Math.max(16, Math.round(TEXTURE_TILE_SIZE * scale));
+  return sharp(tilePath)
+    .resize(size, size, { kernel: sharp.kernel.lanczos3 })
+    .ensureAlpha(clamp(preset.textureOpacity, 0, 1))
+    .png()
+    .toBuffer();
+}
 
-  for (let i = 0; i < data.length; i += channels) {
-    const grain = Math.round((random() * 2 - 1) * 24);
-    data[i] = clamp(Math.round(128 * 0.75 + tint.r * 0.25) + grain, 0, 255);
-    data[i + 1] = clamp(Math.round(128 * 0.75 + tint.g * 0.25) + grain, 0, 255);
-    data[i + 2] = clamp(Math.round(128 * 0.75 + tint.b * 0.25) + grain, 0, 255);
-    data[i + 3] = alpha;
-  }
-
-  return sharp(data, { raw: { width, height, channels } }).png().toBuffer();
+/** EXIF-oriented pixel dimensions ( .rotate() applies the same orientation). */
+function orientedDimensions(meta) {
+  const swap = meta.orientation >= 5 && meta.orientation <= 8;
+  return {
+    width: swap ? meta.height : meta.width,
+    height: swap ? meta.width : meta.height
+  };
 }
 
 /** Resize + focal-crop one source into its window; returns a PNG buffer. */
@@ -417,10 +603,7 @@ async function renderSlotImage(sourceBuffer, win, focal) {
     throw new Error('Unable to read source image dimensions');
   }
 
-  // .rotate() below applies EXIF orientation, so work in oriented dimensions.
-  const swap = meta.orientation >= 5 && meta.orientation <= 8;
-  const srcW = swap ? meta.height : meta.width;
-  const srcH = swap ? meta.width : meta.height;
+  const { width: srcW, height: srcH } = orientedDimensions(meta);
 
   const crop = computeCoverCrop(srcW, srcH, win.width, win.height, focal);
 
@@ -450,21 +633,47 @@ async function renderCollage(recipe, sources, options = {}) {
   const scale = width / CANVAS.width;
   const height = Math.round(CANVAS.height * scale);
 
-  const windows = computeLayout(normalized.template, normalized.matte.borderWidth, scale);
-
-  const slotLayers = await Promise.all(normalized.slots.map(async (slot, i) => {
+  const slotBuffers = await Promise.all(normalized.slots.map(async (slot, i) => {
     const source = sources && sources[slot.imageId];
     if (source === undefined || source === null) {
       throw new Error(`No source provided for slot ${i} (imageId "${slot.imageId}")`);
     }
-    const buffer = await loadSourceBuffer(source);
-    const input = await renderSlotImage(buffer, windows[i], slot.focal);
+    return loadSourceBuffer(source);
+  }));
+
+  // Solo picks its window orientation from the (EXIF-oriented) source aspect.
+  let orientation = 'portrait';
+  if (normalized.template === 'solo') {
+    const meta = await sharp(slotBuffers[0]).metadata();
+    if (!meta.width || !meta.height) {
+      throw new Error('Unable to read source image dimensions');
+    }
+    const dims = orientedDimensions(meta);
+    orientation = soloOrientation(dims.width, dims.height);
+  }
+
+  const windows = computeLayout(normalized.template, normalized.matte.borderWidth, scale, orientation);
+
+  const slotLayers = await Promise.all(slotBuffers.map(async (buffer, i) => {
+    const input = await renderSlotImage(buffer, windows[i], normalized.slots[i].focal);
     return { input, left: windows[i].left, top: windows[i].top };
   }));
 
-  const textureLayer = await buildTextureLayer(width, height, preset);
   const dropShadowSvg = buildDropShadowSvg(width, height, windows, preset, scale);
-  const effectsSvg = buildWindowEffectsSvg(width, height, windows, preset, scale);
+  const effectsSvg = buildWindowEffectsSvg(
+    width, height, windows, preset, scale, normalized.matte.depthStyle
+  );
+
+  const composites = [];
+  if (normalized.matte.texture !== 'none') {
+    const tile = await buildTextureTile(normalized.matte.texture, preset, scale);
+    composites.push({ input: tile, tile: true, blend: 'soft-light' });
+  }
+  composites.push(
+    { input: dropShadowSvg, blend: 'over' },
+    ...slotLayers.map(layer => ({ ...layer, blend: 'over' })),
+    { input: effectsSvg, blend: 'over' }
+  );
 
   const quality = width >= CANVAS.width ? JPEG_QUALITY_FULL : JPEG_QUALITY_PREVIEW;
 
@@ -476,12 +685,7 @@ async function renderCollage(recipe, sources, options = {}) {
       background: hexToRgb(preset.matteColor)
     }
   })
-    .composite([
-      { input: textureLayer, blend: 'overlay' },
-      { input: dropShadowSvg, blend: 'over' },
-      ...slotLayers.map(layer => ({ ...layer, blend: 'over' })),
-      { input: effectsSvg, blend: 'over' }
-    ])
+    .composite(composites)
     .jpeg({ quality, chromaSubsampling: '4:4:4' })
     .toBuffer();
 
@@ -499,6 +703,10 @@ module.exports = {
   BORDER_WIDTH,
   TEMPLATES,
   MATTE_PRESETS,
+  DEPTH_STYLES,
+  TEXTURES,
+  SOLO_WINDOW_ASPECT,
+  soloOrientation,
   normalizeRecipe,
   computeLayout,
   computeCoverCrop,
