@@ -303,6 +303,30 @@ test('stored resolved values win over the catalogue', () => {
   );
 });
 
+test('normalizeRecipe resolves tuning defaults and derived rim shades', () => {
+  const params = normalizeRecipe(makeRecipe()).matte.shadowParams;
+  const swatch = MATTE_SWATCHES['gallery-white'];
+  assert.strictEqual(params.bevelFeather, 2.5);
+  assert.strictEqual(params.cutLineWidth, 1.2);
+  assert.strictEqual(params.cutLineOpacity, 0.85);
+  assert.ok(Math.abs(params.cutEdgeTop - -(swatch.bevelTopShadow * 1.6)) < 1e-9);
+  assert.ok(Math.abs(params.cutEdgeBottom - Math.min(0.9, swatch.bevelBottomHighlight * 1.6)) < 1e-9);
+  assert.strictEqual(params.penumbraBlur, 2.6);
+  assert.strictEqual(params.penumbraOpacity, 0.45);
+});
+
+test('rim defaults follow overridden face shading unless pinned', () => {
+  const params = normalizeRecipe(makeRecipe({
+    matte: { swatch: 'gallery-white', shadowParams: { bevelTopShadow: 0.5 } }
+  })).matte.shadowParams;
+  assert.ok(Math.abs(params.cutEdgeTop - -0.8) < 1e-9, 'top rim derives from tuned face');
+
+  const pinned = normalizeRecipe(makeRecipe({
+    matte: { swatch: 'gallery-white', shadowParams: { bevelTopShadow: 0.5, cutEdgeTop: -0.1 } }
+  })).matte.shadowParams;
+  assert.strictEqual(pinned.cutEdgeTop, -0.1, 'explicit rim wins over derivation');
+});
+
 test('normalizeRecipe rejects malformed colour overrides', () => {
   assert.throws(
     () => normalizeRecipe(makeRecipe({ matte: { swatch: 'ivory', matteColor: 'red' } })),
@@ -473,13 +497,25 @@ test('INTEGRATION: matte color shows at the canvas corner, photo inside the wind
     return [raw.data[i], raw.data[i + 1], raw.data[i + 2]];
   };
 
-  // Corner (10,10) sits well inside the 120px border: expect gallery-white matte
+  // Gutter center (between the two windows, far from every edge) is the one
+  // matte region clear of both the frame shadow and the window shadows:
+  // expect gallery-white matte there.
   const matte = MATTE_SWATCHES['gallery-white'].matteColor;
   const expected = [
     parseInt(matte.slice(1, 3), 16),
     parseInt(matte.slice(3, 5), 16),
     parseInt(matte.slice(5, 7), 16)
   ];
+  const gutter = px(Math.floor(CANVAS.width / 2), Math.floor(CANVAS.height / 2));
+  for (let c = 0; c < 3; c++) {
+    assert.ok(
+      Math.abs(gutter[c] - expected[c]) <= 16,
+      `gutter channel ${c}: got ${gutter[c]}, expected ~${expected[c]}`
+    );
+  }
+
+  // The canvas corner is bare matte too (no frame shadow, no outer drop
+  // shadow — nothing paints outside the windows).
   const corner = px(10, 10);
   for (let c = 0; c < 3; c++) {
     assert.ok(
@@ -565,7 +601,7 @@ test('INTEGRATION: legacy v1 recipe and its resolved v2 form render byte-identic
   }
 });
 
-test('INTEGRATION: dropShadow and depth toggles change the render', async () => {
+test('INTEGRATION: depth toggle changes the render; legacy dropShadow flag does not', async () => {
   const a = await createSampleImage('a.jpg', 1200, 1600, { r: 200, g: 40, b: 40 });
   const b = await createSampleImage('b.jpg', 1600, 1200, { r: 40, g: 200, b: 40 });
   const sources = { 'a.jpg': a, 'b.jpg': b };
@@ -574,17 +610,32 @@ test('INTEGRATION: dropShadow and depth toggles change the render', async () => 
   for (const [name, matte] of Object.entries({
     on: { swatch: 'gallery-white', borderWidth: 120 },
     noDrop: { swatch: 'gallery-white', borderWidth: 120, dropShadow: false },
-    noDepth: { swatch: 'gallery-white', borderWidth: 120, depth: false },
-    flat: { swatch: 'gallery-white', borderWidth: 120, dropShadow: false, depth: false }
+    noDepth: { swatch: 'gallery-white', borderWidth: 120, depth: false }
   })) {
     const { buffer } = await renderPreview(makeRecipe({ matte }), sources);
     const meta = await sharp(buffer).metadata();
     assert.strictEqual(meta.width, 960, `${name} width`);
     variants[name] = buffer;
   }
-  assert.ok(!variants.on.equals(variants.noDrop), 'dropShadow off should change pixels');
   assert.ok(!variants.on.equals(variants.noDepth), 'depth off should change pixels');
-  assert.ok(!variants.noDrop.equals(variants.flat), 'flat differs from noDrop');
+  // The outer drop shadow was removed (a recessed print casts nothing onto
+  // the matte); the stored flag survives but no longer affects the render.
+  assert.ok(variants.on.equals(variants.noDrop), 'dropShadow flag must not change pixels');
+});
+
+test('INTEGRATION: tuning overrides change the render', async () => {
+  const a = await createSampleImage('a.jpg', 1200, 1600, { r: 200, g: 40, b: 40 });
+  const b = await createSampleImage('b.jpg', 1600, 1200, { r: 40, g: 200, b: 40 });
+  const sources = { 'a.jpg': a, 'b.jpg': b };
+
+  const base = await renderPreview(makeRecipe(), sources);
+  const tuned = await renderPreview(makeRecipe({
+    matte: {
+      swatch: 'gallery-white', borderWidth: 120,
+      shadowParams: { bevelWidth: 30, cutEdgeBottom: 0.9, penumbraOpacity: 1.2 }
+    }
+  }), sources);
+  assert.ok(!base.buffer.equals(tuned.buffer), 'tuned params must change pixels');
 });
 
 test('INTEGRATION: every catalogue swatch renders', async () => {

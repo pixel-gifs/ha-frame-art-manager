@@ -1,5 +1,44 @@
 import { useState } from 'react';
-import { BORDER_CHIPS, BORDER_WIDTH, MATTE_SWATCHES } from '../geometry.js';
+import {
+  BORDER_CHIPS,
+  BORDER_WIDTH,
+  MATTE_SWATCHES,
+  SHADOW_PARAM_BOUNDS,
+  effectiveShadowParams,
+} from '../geometry.js';
+
+// Fine-tune sliders: [group, key, label, step]. Bounds come from
+// SHADOW_PARAM_BOUNDS; nested innerShadow keys are listed with dots.
+const TUNING_SLIDERS = [
+  ['Bevel', 'bevelWidth', 'Width (px)', 1],
+  ['Bevel', 'bevelFeather', 'Feather (px)', 0.25],
+  ['Bevel', 'bevelTopShadow', 'Top face shade', 0.01],
+  ['Bevel', 'bevelBottomHighlight', 'Bottom face light', 0.01],
+  ['Edge rims', 'cutLineWidth', 'Width (px)', 0.2],
+  ['Edge rims', 'cutLineOpacity', 'Opacity', 0.05],
+  ['Edge rims', 'cutLineFeather', 'Feather (px)', 0.25],
+  ['Edge rims', 'cutEdgeTop', 'Top rim shade', 0.02],
+  ['Edge rims', 'cutEdgeRight', 'Right rim shade', 0.02],
+  ['Edge rims', 'cutEdgeBottom', 'Bottom rim shade', 0.02],
+  ['Edge rims', 'cutEdgeLeft', 'Left rim shade', 0.02],
+  ['Inner shadow', 'innerShadow.opacity', 'Opacity', 0.02],
+  ['Inner shadow', 'innerShadow.blur', 'Blur (px)', 1],
+  ['Inner shadow', 'innerShadow.offsetY', 'Offset Y (px)', 1],
+  ['Inner shadow', 'penumbraBlur', 'Penumbra width (×)', 0.1],
+  ['Inner shadow', 'penumbraOpacity', 'Penumbra strength (×)', 0.05],
+];
+
+const INNER_SHADOW_BOUNDS = { opacity: [0, 1], blur: [0, 80], offsetY: [0, 40] };
+
+function boundsFor(key) {
+  if (key.startsWith('innerShadow.')) return INNER_SHADOW_BOUNDS[key.split('.')[1]];
+  return SHADOW_PARAM_BOUNDS[key];
+}
+
+function readParam(params, key) {
+  if (key.startsWith('innerShadow.')) return params.innerShadow[key.split('.')[1]];
+  return params[key];
+}
 
 const DEPTH_STYLE_OPTIONS = [
   { key: 'miter', label: 'Mitered' },
@@ -26,6 +65,90 @@ function Chip({ selected, onClick, children }) {
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Sliders over every tunable look param. Writes overrides into
+ * matte.shadowParams (the recipe stores them; the server resolves anything
+ * untouched from the swatch), so the debounced preview is the live readout.
+ */
+function TuningPanel({ matte, onChange }) {
+  const params = effectiveShadowParams(matte);
+  const [copied, setCopied] = useState(false);
+
+  const setParam = (key, value) => {
+    const stored = { ...(matte.shadowParams || {}) };
+    if (key.startsWith('innerShadow.')) {
+      stored.innerShadow = { ...(stored.innerShadow || {}), [key.split('.')[1]]: value };
+    } else {
+      stored[key] = value;
+    }
+    onChange({ ...matte, shadowParams: stored });
+  };
+
+  const copyValues = async () => {
+    try {
+      await navigator.clipboard.writeText(
+        JSON.stringify({ swatch: matte.swatch, shadowParams: matte.shadowParams || {} }, null, 2)
+      );
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard unavailable (http origin) — values stay visible in the UI
+    }
+  };
+
+  let lastGroup = null;
+  return (
+    <div className="space-y-1 rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
+      {TUNING_SLIDERS.map(([group, key, label, step]) => {
+        const [min, max] = boundsFor(key);
+        const value = readParam(params, key);
+        const heading = group !== lastGroup ? group : null;
+        lastGroup = group;
+        return (
+          <div key={key}>
+            {heading && (
+              <p className="mt-2 mb-1 text-[10px] uppercase tracking-wider text-neutral-500 first:mt-0">
+                {heading}
+              </p>
+            )}
+            <label className="flex items-center gap-2 text-xs text-neutral-400">
+              <span className="w-32 shrink-0">{label}</span>
+              <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={value}
+                onChange={(e) => setParam(key, Number(e.target.value))}
+                className="min-w-0 flex-1 accent-sky-400"
+              />
+              <span className="w-12 text-right tabular-nums text-neutral-300">
+                {Number(value).toFixed(step >= 1 ? 0 : 2)}
+              </span>
+            </label>
+          </div>
+        );
+      })}
+      <div className="flex gap-2 pt-2">
+        <button
+          type="button"
+          onClick={() => onChange({ ...matte, shadowParams: undefined })}
+          className="rounded-lg border border-neutral-600 px-3 py-1 text-xs text-neutral-300 hover:border-neutral-400 cursor-pointer"
+        >
+          Reset to swatch
+        </button>
+        <button
+          type="button"
+          onClick={copyValues}
+          className="rounded-lg border border-neutral-600 px-3 py-1 text-xs text-neutral-300 hover:border-neutral-400 cursor-pointer"
+        >
+          {copied ? 'Copied ✓' : 'Copy values'}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -56,8 +179,12 @@ function Toggle({ id, label, hint, checked, onChange }) {
 export default function MattePanel({ matte, onChange }) {
   const chipMatch = BORDER_CHIPS.some((chip) => chip.px === matte.borderWidth);
   const [advancedOpen, setAdvancedOpen] = useState(!chipMatch);
+  const [tuningOpen, setTuningOpen] = useState(false);
 
   const set = (patch) => onChange({ ...matte, ...patch });
+  // A new swatch is a fresh hand-tuned package — stale tuning overrides
+  // from the previous swatch must not carry across.
+  const pickSwatch = (key) => onChange({ ...matte, swatch: key, shadowParams: undefined });
 
   return (
     <section className="space-y-4">
@@ -71,7 +198,7 @@ export default function MattePanel({ matte, onChange }) {
                 key={key}
                 type="button"
                 title={swatch.label}
-                onClick={() => set({ swatch: key })}
+                onClick={() => pickSwatch(key)}
                 className={`flex flex-col items-center gap-1 rounded-lg border px-1 py-2 transition-colors cursor-pointer ${
                   selected
                     ? 'border-sky-400 bg-sky-400/10'
@@ -118,16 +245,9 @@ export default function MattePanel({ matte, onChange }) {
 
       <div className="space-y-2">
         <Toggle
-          id="matte-drop-shadow"
-          label="Drop shadow"
-          hint="print casts onto the matte"
-          checked={matte.dropShadow}
-          onChange={(dropShadow) => set({ dropShadow })}
-        />
-        <Toggle
           id="matte-depth"
           label="Shadowbox depth"
-          hint="bevel + recess shading"
+          hint="bevel, lit edges + recess shading"
           checked={matte.depth}
           onChange={(depth) => set({ depth })}
         />
@@ -166,6 +286,24 @@ export default function MattePanel({ matte, onChange }) {
             onChange={(e) => set({ borderWidth: Number(e.target.value) })}
             className="mt-1 w-full accent-sky-400"
           />
+        )}
+      </div>
+
+      <div>
+        <button
+          type="button"
+          onClick={() => setTuningOpen((open) => !open)}
+          className="text-sm font-medium text-neutral-300 hover:text-neutral-100 cursor-pointer"
+        >
+          {tuningOpen ? '▾' : '▸'} Fine-tune matte{' '}
+          <span className="text-neutral-500 font-normal">
+            (bevel, rims, shadows{matte.shadowParams ? ' · tuned' : ''})
+          </span>
+        </button>
+        {tuningOpen && (
+          <div className="mt-2">
+            <TuningPanel matte={matte} onChange={onChange} />
+          </div>
         )}
       </div>
     </section>

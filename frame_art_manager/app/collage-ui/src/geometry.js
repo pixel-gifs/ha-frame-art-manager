@@ -42,6 +42,65 @@ export function soloOrientation(width, height) {
 export const MATTE_SWATCHES = swatchCatalogue.swatches;
 export const BORDER_CHIPS = swatchCatalogue.borderChips;
 
+// Tunable matte-look params: [min, max] slider bounds and the per-swatch
+// defaults, mirroring collage_service.js resolution (parity-tested there).
+// Rim shades run -1..1: negative = darker than the bevel colour.
+export const SHADOW_PARAM_BOUNDS = {
+  textureOpacity: [0, 1],
+  bevelWidth: [0, 400],
+  bevelTopShadow: [0, 1],
+  bevelBottomHighlight: [0, 1],
+  bevelFeather: [0, 20],
+  cutLineWidth: [0, 12],
+  cutLineFeather: [0, 8],
+  cutLineOpacity: [0, 1],
+  cutEdgeTop: [-1, 1],
+  cutEdgeRight: [-1, 1],
+  cutEdgeBottom: [-1, 1],
+  cutEdgeLeft: [-1, 1],
+  penumbraBlur: [0, 8],
+  penumbraOpacity: [0, 2]
+};
+
+/**
+ * The effective tuning values for a matte: swatch defaults, the server's
+ * derived rim shades, then any stored overrides — the same merge
+ * normalizeRecipe() performs, so the sliders always show what renders.
+ */
+export function effectiveShadowParams(matte = {}) {
+  const swatch = MATTE_SWATCHES[matte.swatch] || MATTE_SWATCHES['gallery-white'];
+  const stored = matte.shadowParams && typeof matte.shadowParams === 'object'
+    ? matte.shadowParams
+    : {};
+  const top = Number.isFinite(stored.bevelTopShadow) ? stored.bevelTopShadow : swatch.bevelTopShadow;
+  const bottom = Number.isFinite(stored.bevelBottomHighlight)
+    ? stored.bevelBottomHighlight
+    : swatch.bevelBottomHighlight;
+  const defaults = {
+    textureOpacity: swatch.textureOpacity,
+    bevelWidth: swatch.bevelWidth,
+    bevelTopShadow: swatch.bevelTopShadow,
+    bevelBottomHighlight: swatch.bevelBottomHighlight,
+    bevelFeather: 2.5,
+    cutLineWidth: 1.2,
+    cutLineFeather: 1,
+    cutLineOpacity: 0.85,
+    cutEdgeTop: -(top * 1.6),
+    cutEdgeRight: -(top * 0.7),
+    cutEdgeBottom: Math.min(0.9, bottom * 1.6),
+    cutEdgeLeft: bottom * 0.8,
+    penumbraBlur: 2.6,
+    penumbraOpacity: 0.45,
+    innerShadow: { ...swatch.innerShadow }
+  };
+  const merged = { ...defaults };
+  for (const key of Object.keys(SHADOW_PARAM_BOUNDS)) {
+    if (Number.isFinite(stored[key])) merged[key] = stored[key];
+  }
+  merged.innerShadow = { ...defaults.innerShadow, ...(stored.innerShadow || {}) };
+  return merged;
+}
+
 /** A fresh sparse v2 matte spec — the server resolves the rest on render. */
 export function defaultMatte() {
   return {
@@ -56,9 +115,9 @@ export function defaultMatte() {
 
 /**
  * The builder-editable view of a stored matte spec (legacy v1 `preset` or
- * resolved v2): just the selector fields. Resolved colour/shadow overrides
- * are intentionally dropped — the builder always re-resolves from the
- * catalogue, so what you see while editing is what a re-save renders.
+ * resolved v2): the selector fields plus any Fine-tune overrides. Resolved
+ * colours are dropped (the builder re-resolves from the catalogue), but
+ * shadowParams survive so a tuned collage reopens with its tuning intact.
  */
 export function matteForUi(matte = {}) {
   const swatch = matte.swatch || matte.preset;
@@ -69,7 +128,10 @@ export function matteForUi(matte = {}) {
     ...(matte.depthStyle !== undefined ? { depthStyle: matte.depthStyle } : {}),
     ...(matte.texture !== undefined ? { texture: matte.texture } : {}),
     ...(matte.dropShadow !== undefined ? { dropShadow: matte.dropShadow !== false } : {}),
-    ...(matte.depth !== undefined ? { depth: matte.depth !== false } : {})
+    ...(matte.depth !== undefined ? { depth: matte.depth !== false } : {}),
+    ...(matte.shadowParams && typeof matte.shadowParams === 'object'
+      ? { shadowParams: matte.shadowParams }
+      : {})
   };
 }
 

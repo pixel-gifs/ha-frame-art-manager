@@ -35,6 +35,46 @@ test('client exports the same template and matte swatch catalogue', () => {
   // bevels, shadow params — must be deep-equal, not just same-keyed.
   assert.deepStrictEqual(client.MATTE_SWATCHES, server.MATTE_SWATCHES);
   assert.deepStrictEqual(client.BORDER_CHIPS, server.BORDER_CHIPS);
+  assert.deepStrictEqual(client.SHADOW_PARAM_BOUNDS, server.SHADOW_PARAM_BOUNDS);
+});
+
+test('client effectiveShadowParams mirrors server resolution for every swatch', () => {
+  for (const key of Object.keys(server.MATTE_SWATCHES)) {
+    const resolved = server.normalizeRecipe({
+      template: 'solo',
+      matte: { swatch: key },
+      slots: [{ imageId: 'x.jpg' }]
+    }).matte.shadowParams;
+    const clientSide = client.effectiveShadowParams({ swatch: key });
+    for (const param of Object.keys(server.SHADOW_PARAM_BOUNDS)) {
+      assert.ok(
+        Math.abs(clientSide[param] - resolved[param]) < 1e-9,
+        `${key}.${param}: client ${clientSide[param]} vs server ${resolved[param]}`
+      );
+    }
+    assert.deepStrictEqual(clientSide.innerShadow, resolved.innerShadow, `${key}.innerShadow`);
+  }
+});
+
+test('client effectiveShadowParams honors overrides the way the server does', () => {
+  const matte = {
+    swatch: 'museum-black',
+    shadowParams: {
+      bevelTopShadow: 0.2, cutEdgeBottom: 0.7, bevelFeather: 6,
+      innerShadow: { opacity: 0.8 }
+    }
+  };
+  const resolved = server.normalizeRecipe({
+    template: 'solo', matte, slots: [{ imageId: 'x.jpg' }]
+  }).matte.shadowParams;
+  const clientSide = client.effectiveShadowParams(matte);
+  for (const param of Object.keys(server.SHADOW_PARAM_BOUNDS)) {
+    assert.ok(
+      Math.abs(clientSide[param] - resolved[param]) < 1e-9,
+      `${param}: client ${clientSide[param]} vs server ${resolved[param]}`
+    );
+  }
+  assert.deepStrictEqual(clientSide.innerShadow, resolved.innerShadow);
 });
 
 test('normalized v2 matte keys resolve from catalogue entries the client can select', () => {
@@ -72,9 +112,15 @@ test('client matteForUi round-trips legacy and resolved mattes to selector field
     matte: { swatch: 'sage', depthStyle: 'double', texture: 'weave', dropShadow: false, depth: false, borderWidth: 220 },
     slots: [{ imageId: 'x.jpg' }]
   }).matte;
-  assert.deepStrictEqual(client.matteForUi(resolved), {
-    swatch: 'sage', borderWidth: 220, depthStyle: 'double', texture: 'weave', dropShadow: false, depth: false
-  });
+  const ui = client.matteForUi(resolved);
+  assert.strictEqual(ui.swatch, 'sage');
+  assert.strictEqual(ui.borderWidth, 220);
+  assert.strictEqual(ui.depthStyle, 'double');
+  assert.strictEqual(ui.texture, 'weave');
+  assert.strictEqual(ui.dropShadow, false);
+  assert.strictEqual(ui.depth, false);
+  // Fine-tune params survive the reopen (stored values keep rendering).
+  assert.deepStrictEqual(ui.shadowParams, resolved.shadowParams);
 });
 
 test('client canvas and border bounds match the server', () => {
