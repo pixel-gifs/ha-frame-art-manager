@@ -640,6 +640,24 @@ test('INTEGRATION: inner shadows stay at the window edge, print centre unchanged
   assert.ok(Math.abs(inside[0] - centre[0]) <= 4, 'shadow must decay within the edge band');
 });
 
+test('INTEGRATION: edge rims render and respond to tuning alone', async () => {
+  // Regression: rims were emitted as filtered <line> elements — an
+  // axis-aligned line has a zero-area bbox, the filter region collapsed and
+  // librsvg dropped them, so rim settings silently did nothing.
+  const src = await createSampleImage('flat2.jpg', 1200, 1600, { r: 180, g: 170, b: 160 });
+  const mk = sp => ({
+    template: 'solo',
+    matte: { swatch: 'gallery-white', borderWidth: 220, shadowParams: sp },
+    slots: [{ imageId: 'flat2.jpg' }]
+  });
+  const sources = { 'flat2.jpg': src };
+  const base = (await renderCollage(mk(undefined), sources, { width: 960 })).buffer;
+  const tuned = (await renderCollage(mk({ rimWidth: 6, rimTop: -0.9, rimBottom: 0.9 }), sources, { width: 960 })).buffer;
+  const off = (await renderCollage(mk({ rimOpacity: 0 }), sources, { width: 960 })).buffer;
+  assert.ok(!base.equals(tuned), 'rim tuning alone must change pixels');
+  assert.ok(!base.equals(off), 'rims at default settings must actually render');
+});
+
 test('INTEGRATION: tuning overrides change the render', async () => {
   const a = await createSampleImage('a.jpg', 1200, 1600, { r: 200, g: 40, b: 40 });
   const b = await createSampleImage('b.jpg', 1600, 1200, { r: 40, g: 200, b: 40 });

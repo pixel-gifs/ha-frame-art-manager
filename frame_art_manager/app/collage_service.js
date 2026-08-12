@@ -515,15 +515,20 @@ function cutEdges(rect, spec, scale, opacityFactor) {
   const w = Math.max(1, Math.round(spec.rimWidth * scale));
   const opacity = clamp(spec.rimOpacity * opacityFactor, 0, 1);
   const L = rect.x, T = rect.y, R = rect.x + rect.w, B = rect.y + rect.h;
-  const line = (x1, y1, x2, y2, amount) =>
-    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ` +
-    `stroke="${shade(spec.bevelColor, amount)}" stroke-opacity="${opacity}" ` +
-    `stroke-width="${w}" filter="url(#cf)"/>`;
+  const half = w / 2;
+  // Thin rects, not <line>s: an axis-aligned line has a zero-area bounding
+  // box, which collapses the blur filter's region and librsvg drops the
+  // element entirely (rims silently vanished). Rects filter correctly.
+  // Draw order puts the lit bottom/left rims on top at the corners.
+  const rim = (x, y, rw, rh, amount) =>
+    `<rect x="${x}" y="${y}" width="${rw}" height="${rh}" ` +
+    `fill="${shade(spec.bevelColor, amount)}" fill-opacity="${opacity}" ` +
+    `filter="url(#cf)"/>`;
   return (
-    line(L, T, R, T, spec.rimTop) +
-    line(R, T, R, B, spec.rimRight) +
-    line(L, B, R, B, spec.rimBottom) +
-    line(L, T, L, B, spec.rimLeft)
+    rim(L - half, T - half, R - L + w, w, spec.rimTop) +
+    rim(R - half, T - half, w, B - T + w, spec.rimRight) +
+    rim(L - half, B - half, R - L + w, w, spec.rimBottom) +
+    rim(L - half, T - half, w, B - T + w, spec.rimLeft)
   );
 }
 
