@@ -42,62 +42,51 @@ export function soloOrientation(width, height) {
 export const MATTE_SWATCHES = swatchCatalogue.swatches;
 export const BORDER_CHIPS = swatchCatalogue.borderChips;
 
-// Tunable matte-look params: [min, max] slider bounds and the per-swatch
-// defaults, mirroring collage_service.js resolution (parity-tested there).
-// Rim shades run -1..1: negative = darker than the bevel colour.
+// Tunable matte-look params: [min, max] slider bounds and the global light
+// model defaults, mirroring collage_service.js resolution (parity-tested).
+// Face/rim shades run -1..1: negative = darker than the bevel colour.
 export const SHADOW_PARAM_BOUNDS = {
   textureOpacity: [0, 1],
   bevelWidth: [0, 400],
-  bevelTopShadow: [0, 1],
-  bevelBottomHighlight: [0, 1],
   bevelFeather: [0, 20],
-  cutLineWidth: [0, 12],
-  cutLineFeather: [0, 8],
-  cutLineOpacity: [0, 1],
-  cutEdgeTop: [-1, 1],
-  cutEdgeRight: [-1, 1],
-  cutEdgeBottom: [-1, 1],
-  cutEdgeLeft: [-1, 1],
-  penumbraBlur: [0, 8],
-  penumbraOpacity: [0, 2]
+  faceTop: [-1, 1], faceRight: [-1, 1], faceBottom: [-1, 1], faceLeft: [-1, 1],
+  rimWidth: [0, 12], rimFeather: [0, 8], rimOpacity: [0, 1],
+  rimTop: [-1, 1], rimRight: [-1, 1], rimBottom: [-1, 1], rimLeft: [-1, 1],
+  shadowAngle: [0, 360], shadowDistance: [0, 80],
+  umbraOpacity: [0, 1], umbraBlur: [0, 120], umbraSpread: [0, 80],
+  penumbraOpacity: [0, 1], penumbraBlur: [0, 200], penumbraSpread: [0, 100]
+};
+
+// Matt's baked light model (tuning-lab session 2026-08-12) — must match the
+// server's LOOK_DEFAULTS in collage_service.js.
+export const LOOK_DEFAULTS = {
+  bevelFeather: 0.25,
+  faceTop: -0.23, faceRight: -0.155, faceBottom: -0.045, faceLeft: 0.45,
+  rimWidth: 2.2, rimFeather: 0.75, rimOpacity: 1,
+  rimTop: -0.16, rimRight: -0.1, rimBottom: -0.045, rimLeft: 0.42,
+  shadowAngle: 135, shadowDistance: 10,
+  umbraOpacity: 0.12, umbraBlur: 2, umbraSpread: 0,
+  penumbraOpacity: 0.08, penumbraBlur: 6, penumbraSpread: 7
 };
 
 /**
- * The effective tuning values for a matte: swatch defaults, the server's
- * derived rim shades, then any stored overrides — the same merge
- * normalizeRecipe() performs, so the sliders always show what renders.
+ * The effective tuning values for a matte: swatch fields + the global light
+ * model, then any stored overrides — the same merge normalizeRecipe()
+ * performs, so the sliders always show what renders.
  */
 export function effectiveShadowParams(matte = {}) {
   const swatch = MATTE_SWATCHES[matte.swatch] || MATTE_SWATCHES['gallery-white'];
   const stored = matte.shadowParams && typeof matte.shadowParams === 'object'
     ? matte.shadowParams
     : {};
-  const top = Number.isFinite(stored.bevelTopShadow) ? stored.bevelTopShadow : swatch.bevelTopShadow;
-  const bottom = Number.isFinite(stored.bevelBottomHighlight)
-    ? stored.bevelBottomHighlight
-    : swatch.bevelBottomHighlight;
-  const defaults = {
+  const merged = {
     textureOpacity: swatch.textureOpacity,
     bevelWidth: swatch.bevelWidth,
-    bevelTopShadow: swatch.bevelTopShadow,
-    bevelBottomHighlight: swatch.bevelBottomHighlight,
-    bevelFeather: 2.5,
-    cutLineWidth: 1.2,
-    cutLineFeather: 1,
-    cutLineOpacity: 0.85,
-    cutEdgeTop: -(top * 1.6),
-    cutEdgeRight: -(top * 0.7),
-    cutEdgeBottom: Math.min(0.9, bottom * 1.6),
-    cutEdgeLeft: bottom * 0.8,
-    penumbraBlur: 2.6,
-    penumbraOpacity: 0.45,
-    innerShadow: { ...swatch.innerShadow }
+    ...LOOK_DEFAULTS
   };
-  const merged = { ...defaults };
   for (const key of Object.keys(SHADOW_PARAM_BOUNDS)) {
     if (Number.isFinite(stored[key])) merged[key] = stored[key];
   }
-  merged.innerShadow = { ...defaults.innerShadow, ...(stored.innerShadow || {}) };
   return merged;
 }
 

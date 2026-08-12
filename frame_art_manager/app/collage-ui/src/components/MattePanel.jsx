@@ -7,38 +7,32 @@ import {
   effectiveShadowParams,
 } from '../geometry.js';
 
-// Fine-tune sliders: [group, key, label, step]. Bounds come from
-// SHADOW_PARAM_BOUNDS; nested innerShadow keys are listed with dots.
+// Fine-tune sliders: [group, key, label, min, max, step] — slider ranges are
+// the useful subranges of SHADOW_PARAM_BOUNDS. Shade sliders run -1..1:
+// negative = darker than the bevel colour, positive = brighter.
 const TUNING_SLIDERS = [
-  ['Bevel', 'bevelWidth', 'Width (px)', 1],
-  ['Bevel', 'bevelFeather', 'Feather (px)', 0.25],
-  ['Bevel', 'bevelTopShadow', 'Top face shade', 0.01],
-  ['Bevel', 'bevelBottomHighlight', 'Bottom face light', 0.01],
-  ['Edge rims', 'cutLineWidth', 'Width (px)', 0.2],
-  ['Edge rims', 'cutLineOpacity', 'Opacity', 0.05],
-  ['Edge rims', 'cutLineFeather', 'Feather (px)', 0.25],
-  ['Edge rims', 'cutEdgeTop', 'Top rim shade', 0.02],
-  ['Edge rims', 'cutEdgeRight', 'Right rim shade', 0.02],
-  ['Edge rims', 'cutEdgeBottom', 'Bottom rim shade', 0.02],
-  ['Edge rims', 'cutEdgeLeft', 'Left rim shade', 0.02],
-  ['Inner shadow', 'innerShadow.opacity', 'Opacity', 0.02],
-  ['Inner shadow', 'innerShadow.blur', 'Blur (px)', 1],
-  ['Inner shadow', 'innerShadow.offsetY', 'Offset Y (px)', 1],
-  ['Inner shadow', 'penumbraBlur', 'Penumbra width (×)', 0.1],
-  ['Inner shadow', 'penumbraOpacity', 'Penumbra strength (×)', 0.05],
+  ['Bevel', 'bevelWidth', 'Width (px)', 0, 40, 1],
+  ['Bevel', 'bevelFeather', 'Feather (px)', 0, 12, 0.25],
+  ['Bevel faces', 'faceTop', 'Top shade', -1, 1, 0.01],
+  ['Bevel faces', 'faceRight', 'Right shade', -1, 1, 0.01],
+  ['Bevel faces', 'faceBottom', 'Bottom shade', -1, 1, 0.01],
+  ['Bevel faces', 'faceLeft', 'Left shade', -1, 1, 0.01],
+  ['Edge rims', 'rimWidth', 'Width (px)', 0, 8, 0.2],
+  ['Edge rims', 'rimOpacity', 'Opacity', 0, 1, 0.05],
+  ['Edge rims', 'rimFeather', 'Feather (px)', 0, 6, 0.25],
+  ['Edge rims', 'rimTop', 'Top shade', -1, 1, 0.01],
+  ['Edge rims', 'rimRight', 'Right shade', -1, 1, 0.01],
+  ['Edge rims', 'rimBottom', 'Bottom shade', -1, 1, 0.01],
+  ['Edge rims', 'rimLeft', 'Left shade', -1, 1, 0.01],
+  ['Shadow fall', 'shadowAngle', 'Direction (°)', 0, 360, 5],
+  ['Shadow fall', 'shadowDistance', 'Distance (px)', 0, 40, 1],
+  ['Umbra', 'umbraOpacity', 'Opacity', 0, 1, 0.02],
+  ['Umbra', 'umbraBlur', 'Blur', 0, 60, 1],
+  ['Umbra', 'umbraSpread', 'Spread (px)', 0, 40, 1],
+  ['Penumbra', 'penumbraOpacity', 'Opacity', 0, 1, 0.02],
+  ['Penumbra', 'penumbraBlur', 'Blur', 0, 160, 2],
+  ['Penumbra', 'penumbraSpread', 'Spread (px)', 0, 60, 1],
 ];
-
-const INNER_SHADOW_BOUNDS = { opacity: [0, 1], blur: [0, 80], offsetY: [0, 40] };
-
-function boundsFor(key) {
-  if (key.startsWith('innerShadow.')) return INNER_SHADOW_BOUNDS[key.split('.')[1]];
-  return SHADOW_PARAM_BOUNDS[key];
-}
-
-function readParam(params, key) {
-  if (key.startsWith('innerShadow.')) return params.innerShadow[key.split('.')[1]];
-  return params[key];
-}
 
 const DEPTH_STYLE_OPTIONS = [
   { key: 'miter', label: 'Mitered' },
@@ -78,13 +72,7 @@ function TuningPanel({ matte, onChange }) {
   const [copied, setCopied] = useState(false);
 
   const setParam = (key, value) => {
-    const stored = { ...(matte.shadowParams || {}) };
-    if (key.startsWith('innerShadow.')) {
-      stored.innerShadow = { ...(stored.innerShadow || {}), [key.split('.')[1]]: value };
-    } else {
-      stored[key] = value;
-    }
-    onChange({ ...matte, shadowParams: stored });
+    onChange({ ...matte, shadowParams: { ...(matte.shadowParams || {}), [key]: value } });
   };
 
   const copyValues = async () => {
@@ -102,9 +90,8 @@ function TuningPanel({ matte, onChange }) {
   let lastGroup = null;
   return (
     <div className="space-y-1 rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
-      {TUNING_SLIDERS.map(([group, key, label, step]) => {
-        const [min, max] = boundsFor(key);
-        const value = readParam(params, key);
+      {TUNING_SLIDERS.map(([group, key, label, min, max, step]) => {
+        const value = params[key];
         const heading = group !== lastGroup ? group : null;
         lastGroup = group;
         return (

@@ -23,8 +23,9 @@ const heicConvert = require('heic-convert');
  *       dropShadow: bool,                            // legacy, accepted + stored, no render effect
  *       depth: bool,                                 // default true (bevel + inner shadow)
  *       borderWidth: px,
- *       shadowParams: { textureOpacity, bevelWidth, bevelTopShadow,
- *                       bevelBottomHighlight, innerShadow, dropShadow }
+ *       shadowParams: { textureOpacity, bevelWidth, ...LOOK_DEFAULTS keys }
+ *                     // flat tunables: bevel feather, per-side face/rim
+ *                     // shades, shadow angle/distance, umbra + penumbra
  *     },
  *     slots: [{ imageId, focal: { x: 0..1, y: 0..1 } }, ...]
  *   }
@@ -80,28 +81,24 @@ const RECESS_WIDTH_FACTOR = 1.7;
 const DOUBLE_REVEAL_FACTOR = 2.5;
 const DOUBLE_INNER_FACTOR = 0.75;
 
-// Look defaults, tuned against Samsung's built-in matte (photographed on
-// the TV): every transition in a real shadowbox is soft. All of these are
-// per-recipe tunable via matte.shadowParams (the builder's Fine-tune panel);
-// the constants below are only the derivation defaults. px at 4K.
-const BEVEL_FEATHER_DEFAULT = 2.5;       // gaussian blur on the miter faces
-const CUT_LINE_WIDTH_DEFAULT = 1.2;      // rim stroke width
-const CUT_LINE_FEATHER_DEFAULT = 1;      // gaussian blur on the rims
-const CUT_LINE_OPACITY_DEFAULT = 0.85;   // rims are lit colours, near-solid
-const PENUMBRA_BLUR_DEFAULT = 2.6;       // x innerShadow.blur, 2nd layer
-const PENUMBRA_OPACITY_DEFAULT = 0.45;   // x innerShadow.opacity
-// The window's outer cut rim, per side: shade() amounts derived from the
-// swatch's (resolved) face shading so the light model holds on dark mattes.
-// Bottom and left catch light (brighter than their bevel faces); top and
-// right sit in shade (darker than theirs, but only just).
-function derivedCutEdges(bevelTopShadow, bevelBottomHighlight) {
-  return {
-    cutEdgeTop: -(bevelTopShadow * 1.6),
-    cutEdgeRight: -(bevelTopShadow * 0.7),
-    cutEdgeBottom: Math.min(0.9, bevelBottomHighlight * 1.6),
-    cutEdgeLeft: bevelBottomHighlight * 0.8
-  };
-}
+// The global light model, baked from Matt's tuning-lab session (2026-08-12):
+// light from the upper-right (shadow falls down-left at 135°), a near-crisp
+// bevel, per-side face/rim shade() factors on the swatch's bevel colour
+// (top darkest → left brightest), solid lit rims, and two subtle tight
+// shadow layers. Every key is per-recipe tunable via matte.shadowParams;
+// px values are at the 4K reference canvas, blurs are SVG stdDeviations.
+// Kept in lockstep with collage-ui/src/geometry.js (parity-tested).
+const LOOK_DEFAULTS = {
+  bevelFeather: 0.25,
+  faceTop: -0.23, faceRight: -0.155, faceBottom: -0.045, faceLeft: 0.45,
+  rimWidth: 2.2, rimFeather: 0.75, rimOpacity: 1,
+  rimTop: -0.16, rimRight: -0.1, rimBottom: -0.045, rimLeft: 0.42,
+  shadowAngle: 135, shadowDistance: 10,
+  umbraOpacity: 0.12, umbraBlur: 2, umbraSpread: 0,
+  penumbraOpacity: 0.08, penumbraBlur: 6, penumbraSpread: 7
+};
+// The penumbra drifts further along the shadow direction than the umbra.
+const PENUMBRA_DRIFT = 1.6;
 
 const TEXTURE_TILE_SIZE = 512;
 
@@ -113,28 +110,21 @@ const SWATCH_CATALOGUE = require('./matte_swatches.json');
 const MATTE_SWATCHES = SWATCH_CATALOGUE.swatches;
 const BORDER_CHIPS = SWATCH_CATALOGUE.borderChips;
 
-// The numeric shadow/bevel/tuning fields a resolved matte spec carries, as
-// [min, max] clamp bounds for stored overrides. Rim shades run -1..1
-// (negative = darker than the bevel colour, positive = lighter). innerShadow
-// and dropShadow are nested objects of plain numbers bounded 0..1 for
-// opacity, 0..400px otherwise. Kept in lockstep with the client's copy in
-// collage-ui/src/geometry.js (parity-tested).
+// The numeric tuning fields a resolved matte spec carries, as [min, max]
+// clamp bounds for stored overrides. Face/rim shades run -1..1 (negative =
+// darker than the bevel colour, positive = lighter). Kept in lockstep with
+// the client's copy in collage-ui/src/geometry.js (parity-tested).
 const PX_MAX = 400;
 const SHADOW_PARAM_BOUNDS = {
   textureOpacity: [0, 1],
   bevelWidth: [0, PX_MAX],
-  bevelTopShadow: [0, 1],
-  bevelBottomHighlight: [0, 1],
   bevelFeather: [0, 20],
-  cutLineWidth: [0, 12],
-  cutLineFeather: [0, 8],
-  cutLineOpacity: [0, 1],
-  cutEdgeTop: [-1, 1],
-  cutEdgeRight: [-1, 1],
-  cutEdgeBottom: [-1, 1],
-  cutEdgeLeft: [-1, 1],
-  penumbraBlur: [0, 8],
-  penumbraOpacity: [0, 2]
+  faceTop: [-1, 1], faceRight: [-1, 1], faceBottom: [-1, 1], faceLeft: [-1, 1],
+  rimWidth: [0, 12], rimFeather: [0, 8], rimOpacity: [0, 1],
+  rimTop: [-1, 1], rimRight: [-1, 1], rimBottom: [-1, 1], rimLeft: [-1, 1],
+  shadowAngle: [0, 360], shadowDistance: [0, 80],
+  umbraOpacity: [0, 1], umbraBlur: [0, 120], umbraSpread: [0, 80],
+  penumbraOpacity: [0, 1], penumbraBlur: [0, 200], penumbraSpread: [0, 100]
 };
 
 function clamp(value, min, max) {
@@ -295,16 +285,6 @@ function resolveNumber(value, fallback, min, max) {
   return Number.isFinite(num) ? clamp(num, min, max) : fallback;
 }
 
-/** Stored shadow-object override merged field-by-field over swatch defaults. */
-function resolveShadowObject(stored, defaults) {
-  const src = stored && typeof stored === 'object' ? stored : {};
-  const out = {};
-  for (const [key, fallback] of Object.entries(defaults)) {
-    out[key] = resolveNumber(src[key], fallback, 0, key === 'opacity' ? 1 : PX_MAX);
-  }
-  return out;
-}
-
 /**
  * Resolve a recipe's matte to the full v2 spec. Accepts:
  *  - legacy v1: { preset, borderWidth } — resolves entirely from the catalogue
@@ -344,22 +324,9 @@ function resolveMatte(matte) {
   };
   resolveKey('textureOpacity', swatch.textureOpacity);
   resolveKey('bevelWidth', swatch.bevelWidth);
-  resolveKey('bevelTopShadow', swatch.bevelTopShadow);
-  resolveKey('bevelBottomHighlight', swatch.bevelBottomHighlight);
-  resolveKey('bevelFeather', BEVEL_FEATHER_DEFAULT);
-  resolveKey('cutLineWidth', CUT_LINE_WIDTH_DEFAULT);
-  resolveKey('cutLineFeather', CUT_LINE_FEATHER_DEFAULT);
-  resolveKey('cutLineOpacity', CUT_LINE_OPACITY_DEFAULT);
-  // Rim defaults derive from the *resolved* face shading, so tuning the
-  // faces moves the rims with them unless the rims are pinned explicitly.
-  const rims = derivedCutEdges(shadowParams.bevelTopShadow, shadowParams.bevelBottomHighlight);
-  for (const [key, fallback] of Object.entries(rims)) {
+  for (const [key, fallback] of Object.entries(LOOK_DEFAULTS)) {
     resolveKey(key, fallback);
   }
-  resolveKey('penumbraBlur', PENUMBRA_BLUR_DEFAULT);
-  resolveKey('penumbraOpacity', PENUMBRA_OPACITY_DEFAULT);
-  shadowParams.innerShadow = resolveShadowObject(stored.innerShadow, swatch.innerShadow);
-  shadowParams.dropShadow = resolveShadowObject(stored.dropShadow, swatch.dropShadow);
 
   return {
     swatch: swatchKey,
@@ -529,10 +496,10 @@ function miterFaces(outer, inner, spec) {
   const c = spec.bevelColor;
   const face = (points, fill) => `<polygon points="${points}" fill="${fill}"/>`;
   return (
-    face(`${oL},${oT} ${oR},${oT} ${iR},${iT} ${iL},${iT}`, shade(c, -spec.bevelTopShadow)) +
-    face(`${oL},${oT} ${iL},${iT} ${iL},${iB} ${oL},${oB}`, shade(c, -spec.bevelTopShadow * 0.55)) +
-    face(`${oL},${oB} ${iL},${iB} ${iR},${iB} ${oR},${oB}`, shade(c, spec.bevelBottomHighlight)) +
-    face(`${oR},${oT} ${oR},${oB} ${iR},${iB} ${iR},${iT}`, shade(c, spec.bevelBottomHighlight * 0.5))
+    face(`${oL},${oT} ${oR},${oT} ${iR},${iT} ${iL},${iT}`, shade(c, spec.faceTop)) +
+    face(`${oL},${oT} ${iL},${iT} ${iL},${iB} ${oL},${oB}`, shade(c, spec.faceLeft)) +
+    face(`${oL},${oB} ${iL},${iB} ${iR},${iB} ${oR},${oB}`, shade(c, spec.faceBottom)) +
+    face(`${oR},${oT} ${oR},${oB} ${iR},${iB} ${iR},${iT}`, shade(c, spec.faceRight))
   );
 }
 
@@ -542,21 +509,21 @@ function miterFaces(outer, inner, spec) {
  * light fall on the rim where the matte surface meets the cut.
  */
 function cutEdges(rect, spec, scale, opacityFactor) {
-  if (spec.cutLineWidth <= 0 || spec.cutLineOpacity <= 0) {
+  if (spec.rimWidth <= 0 || spec.rimOpacity <= 0) {
     return '';
   }
-  const w = Math.max(1, Math.round(spec.cutLineWidth * scale));
-  const opacity = clamp(spec.cutLineOpacity * opacityFactor, 0, 1);
+  const w = Math.max(1, Math.round(spec.rimWidth * scale));
+  const opacity = clamp(spec.rimOpacity * opacityFactor, 0, 1);
   const L = rect.x, T = rect.y, R = rect.x + rect.w, B = rect.y + rect.h;
   const line = (x1, y1, x2, y2, amount) =>
     `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" ` +
     `stroke="${shade(spec.bevelColor, amount)}" stroke-opacity="${opacity}" ` +
     `stroke-width="${w}" filter="url(#cf)"/>`;
   return (
-    line(L, T, R, T, spec.cutEdgeTop) +
-    line(R, T, R, B, spec.cutEdgeRight) +
-    line(L, B, R, B, spec.cutEdgeBottom) +
-    line(L, T, L, B, spec.cutEdgeLeft)
+    line(L, T, R, T, spec.rimTop) +
+    line(R, T, R, B, spec.rimRight) +
+    line(L, B, R, B, spec.rimBottom) +
+    line(L, T, L, B, spec.rimLeft)
   );
 }
 
@@ -567,17 +534,20 @@ function cutEdges(rect, spec, scale, opacityFactor) {
  * recess treatment's top-weighted gradient and corner occlusion.
  */
 function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) {
-  const { opacity, blur, offsetY } = spec.innerShadow;
-  const blurPx = Math.max(0.5, blur * scale);
-  const penumbraPx = Math.max(0.8, blur * spec.penumbraBlur * scale);
-  const dy = offsetY * scale;
-  const pad = Math.ceil(penumbraPx * 4);
+  const umbraBlurPx = Math.max(0.3, spec.umbraBlur * scale);
+  const penumbraPx = Math.max(0.3, spec.penumbraBlur * scale);
+  // Shadow fall: both layers drift along the light direction, the penumbra
+  // further (90° = straight down; Matt's model: 135° = down-left).
+  const rad = (spec.shadowAngle * Math.PI) / 180;
+  const dx = Math.cos(rad) * spec.shadowDistance * scale;
+  const dy = Math.sin(rad) * spec.shadowDistance * scale;
+  const pad = Math.ceil(Math.max(umbraBlurPx, penumbraPx) * 4) + 8;
 
   const defs = [
-    `<filter id="is" x="-30%" y="-30%" width="160%" height="160%">` +
-    `<feGaussianBlur stdDeviation="${blurPx}"/></filter>`,
+    `<filter id="is" x="-40%" y="-40%" width="180%" height="180%">` +
+    `<feGaussianBlur stdDeviation="${umbraBlurPx}"/></filter>`,
     // Wider, fainter second shadow layer: the soft penumbra a real matte
-    // edge throws well past its umbra.
+    // edge throws past its umbra.
     `<filter id="ip" x="-60%" y="-60%" width="220%" height="220%">` +
     `<feGaussianBlur stdDeviation="${penumbraPx}"/></filter>`,
     // Feather the bevel construction: faces and seams blur together the way
@@ -585,12 +555,12 @@ function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) 
     `<filter id="bf" x="-40%" y="-40%" width="180%" height="180%">` +
     `<feGaussianBlur stdDeviation="${Math.max(0.05, spec.bevelFeather * scale)}"/></filter>`,
     `<filter id="cf" x="-40%" y="-40%" width="180%" height="180%">` +
-    `<feGaussianBlur stdDeviation="${Math.max(0.05, spec.cutLineFeather * scale)}"/></filter>`
+    `<feGaussianBlur stdDeviation="${Math.max(0.05, spec.rimFeather * scale)}"/></filter>`
   ];
 
   if (depthStyle === 'recess') {
-    const gradOpacity = clamp(opacity * 0.5, 0, 1);
-    const cornerOpacity = clamp(opacity * 0.4, 0, 1);
+    const gradOpacity = clamp(spec.umbraOpacity * 2, 0, 1);
+    const cornerOpacity = clamp(spec.umbraOpacity * 1.6, 0, 1);
     defs.push(
       `<linearGradient id="rg" x1="0" y1="0" x2="0" y2="1">` +
       `<stop offset="0" stop-color="#000000" stop-opacity="${gradOpacity}"/>` +
@@ -620,19 +590,30 @@ function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) 
       `width="${inner.w}" height="${inner.h}"/></clipPath>`
     );
 
-    // Inner shadow: a blurred "donut" around the window, clipped so only the
-    // bleed into the print shows; offset down for top-lit depth. Two layers:
-    // a tight umbra at the bevel edge plus a wide faint penumbra.
-    const donut =
-      rectPath(inner.x - pad, inner.y - pad, inner.w + 2 * pad, inner.h + 2 * pad) +
-      rectPath(inner.x, inner.y, inner.w, inner.h);
+    // Inner shadows: blurred "donuts" around the window, clipped so only
+    // the bleed into the print shows, drifting along the shadow direction.
+    // Two layers — a tight umbra at the bevel edge and a wide faint
+    // penumbra — each with its own spread (how far the darkness reaches in
+    // before the blur falloff starts; the donut hole shrinks by spread).
+    const shadowLayer = (opacity, spread, filterId, drift) => {
+      if (opacity <= 0) return '';
+      const maxSpread = Math.floor(Math.min(inner.w, inner.h) / 2) - 1;
+      const s = Math.min(Math.round(spread * scale), Math.max(0, maxSpread));
+      const hole = insetRect(inner, s);
+      const donut =
+        rectPath(inner.x - pad, inner.y - pad, inner.w + 2 * pad, inner.h + 2 * pad) +
+        rectPath(hole.x, hole.y, hole.w, hole.h);
+      return (
+        `<path d="${donut}" fill-rule="evenodd" fill="#000000" ` +
+        `fill-opacity="${clamp(opacity, 0, 1)}" filter="url(#${filterId})" ` +
+        `transform="translate(${dx * drift} ${dy * drift})"/>`
+      );
+    };
     parts.push(
       `<g clip-path="url(#win${i})">` +
-      `<path d="${donut}" fill-rule="evenodd" fill="#000000" ` +
-      `fill-opacity="${opacity}" filter="url(#is)" transform="translate(0 ${dy})"/>` +
-      `<path d="${donut}" fill-rule="evenodd" fill="#000000" ` +
-      `fill-opacity="${clamp(opacity * spec.penumbraOpacity, 0, 1)}" ` +
-      `filter="url(#ip)" transform="translate(0 ${dy * 1.6})"/></g>`
+      shadowLayer(spec.umbraOpacity, spec.umbraSpread, 'is', 1) +
+      shadowLayer(spec.penumbraOpacity, spec.penumbraSpread, 'ip', PENUMBRA_DRIFT) +
+      `</g>`
     );
 
     if (depthStyle === 'recess') {
@@ -688,9 +669,14 @@ function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) 
 async function buildTextureTile(texture, spec, scale) {
   const tilePath = path.join(__dirname, 'assets', `texture-${texture}.png`);
   const size = Math.max(16, Math.round(TEXTURE_TILE_SIZE * scale));
+  // Soft-light on a near-white matte compresses the tile's contrast to
+  // sub-JPEG amplitude, so alpha can't control strength — instead expand
+  // the tile's deviation around mid-grey (textureOpacity scales the boost)
+  // and composite at full opacity.
+  const boost = 1 + clamp(spec.textureOpacity, 0, 1) * 9;
   return sharp(tilePath)
     .resize(size, size, { kernel: sharp.kernel.lanczos3 })
-    .ensureAlpha(clamp(spec.textureOpacity, 0, 1))
+    .linear(boost, 128 * (1 - boost))
     .png()
     .toBuffer();
 }

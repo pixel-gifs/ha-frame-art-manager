@@ -152,8 +152,12 @@ test('saving a legacy v1 recipe stores the fully-resolved v2 matte spec', async 
   assert.strictEqual(matte.depth, true);
   assert.ok(/^#[0-9a-f]{6}$/i.test(matte.matteColor), 'matteColor resolved');
   assert.ok(/^#[0-9a-f]{6}$/i.test(matte.bevelColor), 'bevelColor resolved');
-  assert.ok(matte.shadowParams && matte.shadowParams.innerShadow && matte.shadowParams.dropShadow,
-    'shadowParams resolved');
+  assert.ok(
+    matte.shadowParams &&
+    Number.isFinite(matte.shadowParams.umbraOpacity) &&
+    Number.isFinite(matte.shadowParams.shadowAngle),
+    'shadowParams resolved'
+  );
 });
 
 test('re-rendering a stored v1 collage via PUT resolves and renders identically', async () => {

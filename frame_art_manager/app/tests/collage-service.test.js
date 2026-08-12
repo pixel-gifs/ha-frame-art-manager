@@ -261,8 +261,8 @@ test('legacy v1 recipes resolve to the full v2 matte spec', () => {
   assert.strictEqual(normalized.matte.borderWidth, 100);
   assert.strictEqual(normalized.matte.shadowParams.bevelWidth, swatch.bevelWidth);
   assert.strictEqual(normalized.matte.shadowParams.textureOpacity, swatch.textureOpacity);
-  assert.deepStrictEqual(normalized.matte.shadowParams.innerShadow, swatch.innerShadow);
-  assert.deepStrictEqual(normalized.matte.shadowParams.dropShadow, swatch.dropShadow);
+  assert.strictEqual(normalized.matte.shadowParams.shadowAngle, 135);
+  assert.strictEqual(normalized.matte.shadowParams.umbraOpacity, 0.12);
 });
 
 test('normalizeRecipe is idempotent on resolved v2 recipes', () => {
@@ -282,49 +282,39 @@ test('stored resolved values win over the catalogue', () => {
       borderWidth: 120,
       shadowParams: {
         bevelWidth: 20,
-        innerShadow: { opacity: 0.9 },
-        dropShadow: { blur: 40 }
+        umbraOpacity: 0.9,
+        faceTop: -0.6
       }
     }
   }));
   assert.strictEqual(normalized.matte.matteColor, '#123456');
   assert.strictEqual(normalized.matte.bevelColor, '#654321');
   assert.strictEqual(normalized.matte.shadowParams.bevelWidth, 20);
-  assert.strictEqual(normalized.matte.shadowParams.innerShadow.opacity, 0.9);
-  // Missing nested fields still fill from the swatch
-  assert.strictEqual(
-    normalized.matte.shadowParams.innerShadow.blur,
-    MATTE_SWATCHES['gallery-white'].innerShadow.blur
-  );
-  assert.strictEqual(normalized.matte.shadowParams.dropShadow.blur, 40);
-  assert.strictEqual(
-    normalized.matte.shadowParams.dropShadow.opacity,
-    MATTE_SWATCHES['gallery-white'].dropShadow.opacity
-  );
+  assert.strictEqual(normalized.matte.shadowParams.umbraOpacity, 0.9);
+  assert.strictEqual(normalized.matte.shadowParams.faceTop, -0.6);
+  // Untouched params still fill from the light-model defaults
+  assert.strictEqual(normalized.matte.shadowParams.umbraBlur, 2);
+  assert.strictEqual(normalized.matte.shadowParams.rimWidth, 2.2);
 });
 
-test('normalizeRecipe resolves tuning defaults and derived rim shades', () => {
+test('normalizeRecipe resolves the baked light-model defaults', () => {
   const params = normalizeRecipe(makeRecipe()).matte.shadowParams;
-  const swatch = MATTE_SWATCHES['gallery-white'];
-  assert.strictEqual(params.bevelFeather, 2.5);
-  assert.strictEqual(params.cutLineWidth, 1.2);
-  assert.strictEqual(params.cutLineOpacity, 0.85);
-  assert.ok(Math.abs(params.cutEdgeTop - -(swatch.bevelTopShadow * 1.6)) < 1e-9);
-  assert.ok(Math.abs(params.cutEdgeBottom - Math.min(0.9, swatch.bevelBottomHighlight * 1.6)) < 1e-9);
-  assert.strictEqual(params.penumbraBlur, 2.6);
-  assert.strictEqual(params.penumbraOpacity, 0.45);
-});
-
-test('rim defaults follow overridden face shading unless pinned', () => {
-  const params = normalizeRecipe(makeRecipe({
-    matte: { swatch: 'gallery-white', shadowParams: { bevelTopShadow: 0.5 } }
-  })).matte.shadowParams;
-  assert.ok(Math.abs(params.cutEdgeTop - -0.8) < 1e-9, 'top rim derives from tuned face');
-
-  const pinned = normalizeRecipe(makeRecipe({
-    matte: { swatch: 'gallery-white', shadowParams: { bevelTopShadow: 0.5, cutEdgeTop: -0.1 } }
-  })).matte.shadowParams;
-  assert.strictEqual(pinned.cutEdgeTop, -0.1, 'explicit rim wins over derivation');
+  assert.strictEqual(params.bevelFeather, 0.25);
+  assert.strictEqual(params.rimWidth, 2.2);
+  assert.strictEqual(params.rimOpacity, 1);
+  assert.strictEqual(params.rimFeather, 0.75);
+  assert.strictEqual(params.faceTop, -0.23);
+  assert.strictEqual(params.faceLeft, 0.45);
+  assert.strictEqual(params.rimTop, -0.16);
+  assert.strictEqual(params.rimLeft, 0.42);
+  assert.strictEqual(params.shadowAngle, 135);
+  assert.strictEqual(params.shadowDistance, 10);
+  assert.strictEqual(params.umbraOpacity, 0.12);
+  assert.strictEqual(params.umbraBlur, 2);
+  assert.strictEqual(params.umbraSpread, 0);
+  assert.strictEqual(params.penumbraOpacity, 0.08);
+  assert.strictEqual(params.penumbraBlur, 6);
+  assert.strictEqual(params.penumbraSpread, 7);
 });
 
 test('normalizeRecipe rejects malformed colour overrides', () => {
@@ -435,12 +425,7 @@ test('TEMPLATES and MATTE_SWATCHES expose the required entries', () => {
     assert.ok(/^#[0-9a-f]{6}$/i.test(swatch.matteColor), `matteColor for ${name}`);
     assert.ok(/^#[0-9a-f]{6}$/i.test(swatch.bevelColor), `bevelColor for ${name}`);
     assert.ok(swatch.bevelWidth > 0, `bevelWidth for ${name}`);
-    for (const key of ['opacity', 'blur', 'offsetY']) {
-      assert.ok(Number.isFinite(swatch.innerShadow[key]), `innerShadow.${key} for ${name}`);
-    }
-    for (const key of ['opacity', 'blur', 'offsetY', 'spread']) {
-      assert.ok(Number.isFinite(swatch.dropShadow[key]), `dropShadow.${key} for ${name}`);
-    }
+    assert.ok(swatch.textureOpacity >= 0 && swatch.textureOpacity <= 1, `textureOpacity for ${name}`);
   }
 });
 
@@ -632,7 +617,7 @@ test('INTEGRATION: tuning overrides change the render', async () => {
   const tuned = await renderPreview(makeRecipe({
     matte: {
       swatch: 'gallery-white', borderWidth: 120,
-      shadowParams: { bevelWidth: 30, cutEdgeBottom: 0.9, penumbraOpacity: 1.2 }
+      shadowParams: { bevelWidth: 30, rimBottom: 0.9, umbraOpacity: 0.8, shadowAngle: 315 }
     }
   }), sources);
   assert.ok(!base.buffer.equals(tuned.buffer), 'tuned params must change pixels');

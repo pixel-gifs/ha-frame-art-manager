@@ -52,7 +52,6 @@ test('client effectiveShadowParams mirrors server resolution for every swatch', 
         `${key}.${param}: client ${clientSide[param]} vs server ${resolved[param]}`
       );
     }
-    assert.deepStrictEqual(clientSide.innerShadow, resolved.innerShadow, `${key}.innerShadow`);
   }
 });
 
@@ -60,8 +59,8 @@ test('client effectiveShadowParams honors overrides the way the server does', ()
   const matte = {
     swatch: 'museum-black',
     shadowParams: {
-      bevelTopShadow: 0.2, cutEdgeBottom: 0.7, bevelFeather: 6,
-      innerShadow: { opacity: 0.8 }
+      faceTop: -0.5, rimBottom: 0.7, bevelFeather: 6,
+      shadowAngle: 220, umbraOpacity: 0.8, penumbraSpread: 20
     }
   };
   const resolved = server.normalizeRecipe({
@@ -74,7 +73,6 @@ test('client effectiveShadowParams honors overrides the way the server does', ()
       `${param}: client ${clientSide[param]} vs server ${resolved[param]}`
     );
   }
-  assert.deepStrictEqual(clientSide.innerShadow, resolved.innerShadow);
 });
 
 test('normalized v2 matte keys resolve from catalogue entries the client can select', () => {
@@ -87,13 +85,9 @@ test('normalized v2 matte keys resolve from catalogue entries the client can sel
     assert.strictEqual(normalized.matte.swatch, key);
     assert.strictEqual(normalized.matte.matteColor, server.MATTE_SWATCHES[key].matteColor);
     assert.strictEqual(normalized.matte.bevelColor, server.MATTE_SWATCHES[key].bevelColor);
-    assert.deepStrictEqual(
-      normalized.matte.shadowParams.innerShadow,
-      server.MATTE_SWATCHES[key].innerShadow
-    );
-    assert.deepStrictEqual(
-      normalized.matte.shadowParams.dropShadow,
-      server.MATTE_SWATCHES[key].dropShadow
+    assert.strictEqual(
+      normalized.matte.shadowParams.bevelWidth,
+      server.MATTE_SWATCHES[key].bevelWidth
     );
   }
 });
