@@ -1,6 +1,6 @@
 # Frame Art Manager Add-on Configuration
 name: Frame Art Manager (Collage Fork)
-version: "1.26.1"
+version: "1.27.0"
 slug: frame_art_manager
 description: Manage Frame TV artwork library with multi-photo collage compositing
 url: https://github.com/pixel-gifs/ha-frame-art-manager
