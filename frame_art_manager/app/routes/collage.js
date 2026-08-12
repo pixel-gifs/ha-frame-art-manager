@@ -183,36 +183,43 @@ router.post('/', async (req, res) => {
   }
 });
 
+/**
+ * Run the auto-pair selection for a request body. Returns { recipe, skipped }.
+ */
+async function autoSelect(req) {
+  const { tagPool, template, mattePreset, landscapeSolo } = req.body || {};
+  const helper = new MetadataHelper(req.frameArtPath);
+  const metadata = await helper.readMetadata();
+
+  return buildAutoRecipe({
+    images: metadata.images,
+    tagPool,
+    template,
+    mattePreset,
+    landscapeSolo: landscapeSolo === true
+  });
+}
+
 // POST /api/collage/auto — unattended slot-fill + save (nightly HA automations)
 router.post('/auto', async (req, res) => {
   try {
-    const { tagPool, template, mattePreset } = req.body || {};
     const tags = normalizeTags(req.body && req.body.tags);
-
-    const helper = new MetadataHelper(req.frameArtPath);
-    const metadata = await helper.readMetadata();
-
-    const recipe = buildAutoRecipe({ images: metadata.images, tagPool, template, mattePreset });
+    const { recipe, skipped } = await autoSelect(req);
 
     const { filename, data } = await saveNewCollage(req.frameArtPath, recipe, tags);
-    res.json({ success: true, filename, recipe, data });
+    res.json({ success: true, filename, recipe, skipped, data });
   } catch (error) {
     sendError(res, error, 'Failed to auto-generate collage');
   }
 });
 
 // POST /api/collage/suggest — dry-run auto-pair for the builder's dice-roll:
-// same selection logic as /auto, but only returns the recipe (no render, no
-// save) so the user can tweak it before committing.
+// same selection logic as /auto, but nothing is rendered or saved, so the user
+// can tweak the recipe before committing.
 router.post('/suggest', async (req, res) => {
   try {
-    const { tagPool, template, mattePreset } = req.body || {};
-
-    const helper = new MetadataHelper(req.frameArtPath);
-    const metadata = await helper.readMetadata();
-
-    const recipe = buildAutoRecipe({ images: metadata.images, tagPool, template, mattePreset });
-    res.json({ recipe });
+    const { recipe, skipped } = await autoSelect(req);
+    res.json({ recipe, skipped });
   } catch (error) {
     sendError(res, error, 'Failed to suggest collage');
   }

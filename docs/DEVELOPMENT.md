@@ -431,10 +431,18 @@ Re-renders an existing collage in place (same filename). `404` if the image does
 POST /api/collage/auto
 Content-Type: application/json
 
-{ "tagPool": ["family"], "template": "diptych-2", "mattePreset": "ivory", "tags": ["auto"] }
+{ "tagPool": ["family"], "template": "diptych-2", "mattePreset": "ivory", "tags": ["auto"], "landscapeSolo": false }
 ```
 
-Picks aspect-compatible portraits from the tag pool (random template/preset when unspecified), renders, and saves unattended. `template`, `mattePreset`, and `tags` are optional. Intended for nightly HA automations. Response adds the chosen `recipe`.
+Fits photos from the tag pool to the windows their aspect can carry — any
+orientation, ≥50% crop retention per window — then renders and saves
+unattended. `template`, `mattePreset`, `tags`, and `landscapeSolo` are
+optional; with `landscapeSolo: true` landscapes never enter a multi-photo
+template and are routed to the `solo` template instead. Intended for nightly HA
+automations. Response adds the chosen `recipe` plus
+`skipped: [{ imageId, reason }]` — every tagged candidate this build could not
+place (`unknown-aspect`, `no-fitting-window`, `landscape-solo`). Candidates that
+fit but lost the draw are not skips; they are still buildable.
 
 #### Suggest Collage (dry run)
 ```http
@@ -444,7 +452,7 @@ Content-Type: application/json
 { "tagPool": ["family"], "template": "diptych-2", "mattePreset": "ivory" }
 ```
 
-Same auto-pair selection as `/auto`, but nothing is rendered or saved — the response is just `{ "recipe": { /* recipe */ } }` for the builder's dice-roll, ready to tweak and save through the normal flow. `template` and `mattePreset` are optional.
+Same auto-pair selection as `/auto`, but nothing is rendered or saved — the response is just `{ "recipe": { /* recipe */ }, "skipped": [...] }` for the builder's dice-roll, ready to tweak and save through the normal flow. `template`, `mattePreset`, and `landscapeSolo` are optional.
 
 ### Static Files
 

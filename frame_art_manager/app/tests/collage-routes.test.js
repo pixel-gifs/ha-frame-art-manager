@@ -323,13 +323,14 @@ test('auto builds and saves a collage unattended from a tag pool', async () => {
   assert.strictEqual(entry.collageRecipe.template, 'diptych-2');
   assert.strictEqual(entry.collageRecipe.matte.swatch, 'ivory');
 
-  // Slots drawn from tagged portraits only (never the landscape, never other collages)
+  // Slots drawn from the tagged pool (any aspect that fits), never a collage
   entry.collageRecipe.slots.forEach(slot => {
     assert.ok(
-      ['portrait-a.jpg', 'portrait-b.jpg', 'portrait-c.jpg'].includes(slot.imageId),
+      ['portrait-a.jpg', 'portrait-b.jpg', 'portrait-c.jpg', 'landscape-a.jpg'].includes(slot.imageId),
       `unexpected slot image ${slot.imageId}`
     );
   });
+  assert.deepStrictEqual(body.skipped, [], 'every family image fits a diptych window');
 
   const meta = await sharp(path.join(frameArtPath, 'library', body.filename)).metadata();
   assert.strictEqual(meta.width, CANVAS.width);
@@ -342,7 +343,7 @@ test('auto rejects a missing tagPool with 400', async () => {
   assert.match(body.error, /tagPool/);
 });
 
-test('auto returns 400 when the pool has too few compatible portraits', async () => {
+test('auto returns 400 when the pool has too few fitting images', async () => {
   const res = await postJson('/api/collage/auto', {
     tagPool: ['hawaii'],
     template: 'triptych-3'
@@ -369,9 +370,10 @@ test('suggest returns a renderable recipe without saving anything', async () => 
   assert.strictEqual(body.recipe.template, 'diptych-2');
   assert.strictEqual(body.recipe.matte.swatch, 'ivory');
   assert.strictEqual(body.recipe.slots.length, 2);
+  assert.deepStrictEqual(body.skipped, [], 'response must report skips (none here)');
   body.recipe.slots.forEach(slot => {
     assert.ok(
-      ['portrait-a.jpg', 'portrait-b.jpg', 'portrait-c.jpg'].includes(slot.imageId),
+      ['portrait-a.jpg', 'portrait-b.jpg', 'portrait-c.jpg', 'landscape-a.jpg'].includes(slot.imageId),
       `unexpected slot image ${slot.imageId}`
     );
     assert.deepStrictEqual(slot.focal, { x: 0.5, y: 0.5 });
@@ -393,6 +395,21 @@ test('suggest works with only a tagPool (random template + preset)', async () =>
   assert.ok(body.recipe.slots.length >= 2);
 });
 
+test('suggest honours landscapeSolo: landscapes stay out and are reported', async () => {
+  const res = await postJson('/api/collage/suggest', {
+    tagPool: ['family'],
+    template: 'diptych-2',
+    mattePreset: 'ivory',
+    landscapeSolo: true
+  });
+  assert.strictEqual(res.status, 200);
+  const body = await res.json();
+  body.recipe.slots.forEach(slot => {
+    assert.notStrictEqual(slot.imageId, 'landscape-a.jpg', 'landscapeSolo bars multi-photo templates');
+  });
+  assert.deepStrictEqual(body.skipped, [{ imageId: 'landscape-a.jpg', reason: 'landscape-solo' }]);
+});
+
 test('suggest rejects a missing tagPool with 400', async () => {
   const res = await postJson('/api/collage/suggest', {});
   assert.strictEqual(res.status, 400);
@@ -400,7 +417,7 @@ test('suggest rejects a missing tagPool with 400', async () => {
   assert.match(body.error, /tagPool/);
 });
 
-test('suggest returns 400 when the pool has too few compatible portraits', async () => {
+test('suggest returns 400 when the pool has too few fitting images', async () => {
   const res = await postJson('/api/collage/suggest', {
     tagPool: ['hawaii'],
     template: 'grid-2x2'
