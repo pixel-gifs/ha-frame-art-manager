@@ -1,0 +1,155 @@
+{
+  "$comment": "Curated matte swatch catalogue — the single source of truth for server (collage_service.js) and client (collage-ui/src/geometry.js). Each swatch is a hand-tuned colour + bevel + shadow package (#7 decision 2); values are px at the 4K reference canvas, opacities 0..1. gallery-white / ivory / museum-black are verbatim the shipped v1 presets so legacy recipes re-render byte-identically. Key order is the UI grid order.",
+  "swatches": {
+    "gallery-white": {
+      "label": "Gallery White",
+      "matteColor": "#f4f1ea",
+      "bevelColor": "#fdfbf5",
+      "textureOpacity": 0.55,
+      "bevelWidth": 12,
+      "bevelTopShadow": 0.18,
+      "bevelBottomHighlight": 0.35,
+      "innerShadow": { "opacity": 0.34, "blur": 16, "offsetY": 9 },
+      "dropShadow": { "opacity": 0.28, "blur": 22, "offsetY": 10, "spread": 5 }
+    },
+    "museum-white": {
+      "label": "Museum White",
+      "matteColor": "#f8f7f2",
+      "bevelColor": "#fffefa",
+      "textureOpacity": 0.5,
+      "bevelWidth": 12,
+      "bevelTopShadow": 0.17,
+      "bevelBottomHighlight": 0.35,
+      "innerShadow": { "opacity": 0.32, "blur": 16, "offsetY": 9 },
+      "dropShadow": { "opacity": 0.27, "blur": 22, "offsetY": 10, "spread": 5 }
+    },
+    "cool-white": {
+      "label": "Cool White",
+      "matteColor": "#f2f3f1",
+      "bevelColor": "#fbfcfb",
+      "textureOpacity": 0.5,
+      "bevelWidth": 12,
+      "bevelTopShadow": 0.18,
+      "bevelBottomHighlight": 0.34,
+      "innerShadow": { "opacity": 0.33, "blur": 16, "offsetY": 9 },
+      "dropShadow": { "opacity": 0.28, "blur": 22, "offsetY": 10, "spread": 5 }
+    },
+    "antique-white": {
+      "label": "Antique White",
+      "matteColor": "#efe5cf",
+      "bevelColor": "#f9f1dd",
+      "textureOpacity": 0.6,
+      "bevelWidth": 12,
+      "bevelTopShadow": 0.17,
+      "bevelBottomHighlight": 0.32,
+      "innerShadow": { "opacity": 0.31, "blur": 15, "offsetY": 8 },
+      "dropShadow": { "opacity": 0.27, "blur": 21, "offsetY": 10, "spread": 5 }
+    },
+    "warm-grey-white": {
+      "label": "Warm Grey-White",
+      "matteColor": "#e9e4d8",
+      "bevelColor": "#f4f0e6",
+      "textureOpacity": 0.55,
+      "bevelWidth": 12,
+      "bevelTopShadow": 0.18,
+      "bevelBottomHighlight": 0.33,
+      "innerShadow": { "opacity": 0.32, "blur": 16, "offsetY": 9 },
+      "dropShadow": { "opacity": 0.28, "blur": 22, "offsetY": 10, "spread": 5 }
+    },
+    "ivory": {
+      "label": "Ivory",
+      "matteColor": "#f1e9d6",
+      "bevelColor": "#faf4e4",
+      "textureOpacity": 0.6,
+      "bevelWidth": 12,
+      "bevelTopShadow": 0.16,
+      "bevelBottomHighlight": 0.32,
+      "innerShadow": { "opacity": 0.3, "blur": 15, "offsetY": 8 },
+      "dropShadow": { "opacity": 0.26, "blur": 20, "offsetY": 10, "spread": 5 }
+    },
+    "linen": {
+      "label": "Linen",
+      "matteColor": "#e7dfcd",
+      "bevelColor": "#f5efdf",
+      "textureOpacity": 0.95,
+      "bevelWidth": 12,
+      "bevelTopShadow": 0.16,
+      "bevelBottomHighlight": 0.32,
+      "innerShadow": { "opacity": 0.3, "blur": 15, "offsetY": 8 },
+      "dropShadow": { "opacity": 0.28, "blur": 21, "offsetY": 10, "spread": 5 }
+    },
+    "dove-grey": {
+      "label": "Dove Grey",
+      "matteColor": "#d5d1c9",
+      "bevelColor": "#eae7df",
+      "textureOpacity": 0.5,
+      "bevelWidth": 12,
+      "bevelTopShadow": 0.18,
+      "bevelBottomHighlight": 0.34,
+      "innerShadow": { "opacity": 0.32, "blur": 16, "offsetY": 9 },
+      "dropShadow": { "opacity": 0.3, "blur": 22, "offsetY": 10, "spread": 5 }
+    },
+    "sage": {
+      "label": "Sage",
+      "matteColor": "#b7bda9",
+      "bevelColor": "#d3d8c6",
+      "textureOpacity": 0.6,
+      "bevelWidth": 12,
+      "bevelTopShadow": 0.18,
+      "bevelBottomHighlight": 0.33,
+      "innerShadow": { "opacity": 0.32, "blur": 16, "offsetY": 9 },
+      "dropShadow": { "opacity": 0.3, "blur": 22, "offsetY": 10, "spread": 5 }
+    },
+    "clay": {
+      "label": "Clay",
+      "matteColor": "#ad7f63",
+      "bevelColor": "#c69a7e",
+      "textureOpacity": 0.6,
+      "bevelWidth": 12,
+      "bevelTopShadow": 0.2,
+      "bevelBottomHighlight": 0.3,
+      "innerShadow": { "opacity": 0.36, "blur": 16, "offsetY": 9 },
+      "dropShadow": { "opacity": 0.34, "blur": 22, "offsetY": 10, "spread": 5 }
+    },
+    "charcoal": {
+      "label": "Charcoal",
+      "matteColor": "#3b3b38",
+      "bevelColor": "#5c5a52",
+      "textureOpacity": 0.45,
+      "bevelWidth": 11,
+      "bevelTopShadow": 0.34,
+      "bevelBottomHighlight": 0.16,
+      "innerShadow": { "opacity": 0.45, "blur": 17, "offsetY": 9 },
+      "dropShadow": { "opacity": 0.45, "blur": 24, "offsetY": 11, "spread": 5 }
+    },
+    "ink-blue": {
+      "label": "Ink Blue",
+      "matteColor": "#2c3745",
+      "bevelColor": "#4d5a6a",
+      "textureOpacity": 0.45,
+      "bevelWidth": 11,
+      "bevelTopShadow": 0.36,
+      "bevelBottomHighlight": 0.14,
+      "innerShadow": { "opacity": 0.45, "blur": 17, "offsetY": 9 },
+      "dropShadow": { "opacity": 0.45, "blur": 24, "offsetY": 11, "spread": 5 }
+    },
+    "museum-black": {
+      "label": "Museum Black",
+      "matteColor": "#131311",
+      "bevelColor": "#3b3933",
+      "textureOpacity": 0.45,
+      "bevelWidth": 10,
+      "bevelTopShadow": 0.4,
+      "bevelBottomHighlight": 0.12,
+      "innerShadow": { "opacity": 0.5, "blur": 18, "offsetY": 10 },
+      "dropShadow": { "opacity": 0.55, "blur": 26, "offsetY": 12, "spread": 6 }
+    }
+  },
+  "borderChips": [
+    { "label": "None", "px": 0 },
+    { "label": "Slim", "px": 60 },
+    { "label": "Classic", "px": 120 },
+    { "label": "Wide", "px": 220 },
+    { "label": "Poster", "px": 320 }
+  ]
+}

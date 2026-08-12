@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { editIdFromQuery, fetchLibrary, fetchTags, idsFromQuery } from './api.js';
-import { BORDER_WIDTH, TEMPLATES } from './geometry.js';
+import { TEMPLATES, defaultMatte, matteForUi } from './geometry.js';
 import { usePreview } from './usePreview.js';
 import TemplatePicker from './components/TemplatePicker.jsx';
 import SlotStrip from './components/SlotStrip.jsx';
@@ -63,7 +63,12 @@ export default function App() {
     if (editId) {
       const entry = library[editId];
       if (entry && entry.collageRecipe) {
-        setRecipe(entry.collageRecipe);
+        // matteForUi maps legacy v1 mattes (preset) and stored resolved v2
+        // mattes down to the builder's editable selector fields.
+        setRecipe({
+          ...entry.collageRecipe,
+          matte: matteForUi(entry.collageRecipe.matte),
+        });
         setPool(entry.collageRecipe.slots.map((slot) => slot.imageId));
       }
       return;
@@ -73,7 +78,7 @@ export default function App() {
     if (known.length >= MIN_IMAGES && known.length <= MAX_IMAGES) {
       setRecipe({
         template: DEFAULT_TEMPLATE_BY_COUNT[known.length],
-        matte: { preset: 'gallery-white', borderWidth: BORDER_WIDTH.default },
+        matte: defaultMatte(),
         slots: defaultSlots(known),
       });
       setPool(known);
@@ -120,7 +125,9 @@ export default function App() {
   };
 
   const applySuggestion = (suggested) => {
-    setRecipe(suggested);
+    // Server suggestions arrive fully resolved; keep only the selector
+    // fields so later swatch changes re-resolve cleanly.
+    setRecipe({ ...suggested, matte: matteForUi(suggested.matte) });
     setPool(suggested.slots.map((slot) => slot.imageId));
     // A dice-roll is a new collage — never silently overwrite the one being
     // edited with different photos. Saving after a roll POSTs a new file.

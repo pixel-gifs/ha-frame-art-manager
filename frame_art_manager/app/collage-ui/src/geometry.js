@@ -8,6 +8,8 @@
  * cross-checks both implementations and fails on drift.
  */
 
+import swatchCatalogue from '../../matte_swatches.json' with { type: 'json' };
+
 export const CANVAS = { width: 3840, height: 2160 };
 
 export const BORDER_WIDTH = { min: 0, max: 400, default: 120 };
@@ -35,13 +37,41 @@ export function soloOrientation(width, height) {
   return width > height ? 'landscape' : 'portrait';
 }
 
-// UI-facing subset of the server's matte presets: label for the picker,
-// matteColor for the swatch. Render params live server-side only.
-export const MATTE_PRESETS = {
-  'gallery-white': { label: 'Gallery White', matteColor: '#f4f1ea' },
-  ivory: { label: 'Ivory', matteColor: '#f1e9d6' },
-  'museum-black': { label: 'Museum Black', matteColor: '#131311' }
-};
+// Curated swatch catalogue and named border stops — the same JSON the server
+// renders from (matte_swatches.json), so server and client cannot drift.
+export const MATTE_SWATCHES = swatchCatalogue.swatches;
+export const BORDER_CHIPS = swatchCatalogue.borderChips;
+
+/** A fresh sparse v2 matte spec — the server resolves the rest on render. */
+export function defaultMatte() {
+  return {
+    swatch: 'gallery-white',
+    borderWidth: BORDER_WIDTH.default,
+    depthStyle: 'miter',
+    texture: 'none',
+    dropShadow: true,
+    depth: true
+  };
+}
+
+/**
+ * The builder-editable view of a stored matte spec (legacy v1 `preset` or
+ * resolved v2): just the selector fields. Resolved colour/shadow overrides
+ * are intentionally dropped — the builder always re-resolves from the
+ * catalogue, so what you see while editing is what a re-save renders.
+ */
+export function matteForUi(matte = {}) {
+  const swatch = matte.swatch || matte.preset;
+  return {
+    ...defaultMatte(),
+    ...(swatch && swatch in MATTE_SWATCHES ? { swatch } : {}),
+    ...(typeof matte.borderWidth === 'number' ? { borderWidth: matte.borderWidth } : {}),
+    ...(matte.depthStyle !== undefined ? { depthStyle: matte.depthStyle } : {}),
+    ...(matte.texture !== undefined ? { texture: matte.texture } : {}),
+    ...(matte.dropShadow !== undefined ? { dropShadow: matte.dropShadow !== false } : {}),
+    ...(matte.depth !== undefined ? { depth: matte.depth !== false } : {})
+  };
+}
 
 export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));

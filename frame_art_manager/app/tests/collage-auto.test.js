@@ -3,7 +3,7 @@
 const assert = require('assert');
 
 const { buildAutoRecipe } = require('../collage_auto');
-const { TEMPLATES, MATTE_PRESETS } = require('../collage_service');
+const { TEMPLATES, MATTE_SWATCHES } = require('../collage_service');
 
 const colors = {
   green: '\x1b[32m',
@@ -54,7 +54,7 @@ test('fills a diptych with distinct portrait images from the tag pool', () => {
   });
 
   assert.strictEqual(recipe.template, 'diptych-2');
-  assert.strictEqual(recipe.matte.preset, 'gallery-white');
+  assert.strictEqual(recipe.matte.swatch, 'gallery-white');
   assert.strictEqual(recipe.slots.length, 2);
 
   const ids = recipe.slots.map(s => s.imageId);
@@ -119,7 +119,7 @@ test('random template choice only considers templates the pool can fill', () => 
     });
     assert.notStrictEqual(recipe.template, 'grid-2x2');
     assert.ok(TEMPLATES[recipe.template], 'template must be valid');
-    assert.ok(MATTE_PRESETS[recipe.matte.preset], 'matte preset must be valid');
+    assert.ok(MATTE_SWATCHES[recipe.matte.swatch], 'matte swatch must be valid');
   }
 });
 

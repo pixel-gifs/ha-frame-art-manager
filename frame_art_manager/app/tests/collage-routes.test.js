@@ -124,6 +124,75 @@ test('preview returns a low-res JPEG for a valid recipe', async () => {
   assert.strictEqual(meta.height, 540);
 });
 
+// --- Legacy (v1) recipe resolution (#9 acceptance) ---
+
+test('preview accepts a legacy v1 recipe (matte.preset)', async () => {
+  const res = await postJson('/api/collage/preview', {
+    recipe: makeRecipe({ matte: { preset: 'museum-black', borderWidth: 100 } })
+  });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.headers.get('content-type'), 'image/jpeg');
+});
+
+test('saving a legacy v1 recipe stores the fully-resolved v2 matte spec', async () => {
+  const res = await postJson('/api/collage', {
+    recipe: makeRecipe({ matte: { preset: 'ivory', borderWidth: 60 } }),
+    tags: []
+  });
+  assert.strictEqual(res.status, 200);
+  const { filename } = await res.json();
+
+  const matte = (await readMetadata()).images[filename].collageRecipe.matte;
+  assert.strictEqual(matte.swatch, 'ivory');
+  assert.strictEqual(matte.preset, undefined, 'preset must not survive resolution');
+  assert.strictEqual(matte.borderWidth, 60);
+  assert.strictEqual(matte.depthStyle, 'miter');
+  assert.strictEqual(matte.texture, 'none');
+  assert.strictEqual(matte.dropShadow, true);
+  assert.strictEqual(matte.depth, true);
+  assert.ok(/^#[0-9a-f]{6}$/i.test(matte.matteColor), 'matteColor resolved');
+  assert.ok(/^#[0-9a-f]{6}$/i.test(matte.bevelColor), 'bevelColor resolved');
+  assert.ok(matte.shadowParams && matte.shadowParams.innerShadow && matte.shadowParams.dropShadow,
+    'shadowParams resolved');
+});
+
+test('re-rendering a stored v1 collage via PUT resolves and renders identically', async () => {
+  // Save with a legacy recipe, then PUT the same legacy recipe back —
+  // the re-render must reproduce the stored file byte-for-byte.
+  const legacy = makeRecipe({ matte: { preset: 'gallery-white', borderWidth: 120 } });
+  const saveRes = await postJson('/api/collage', { recipe: legacy, tags: [] });
+  const { filename } = await saveRes.json();
+  const filePath = path.join(frameArtPath, 'library', filename);
+  const originalBuffer = await fs.readFile(filePath);
+
+  const res = await putJson(`/api/collage/${filename}`, { recipe: legacy });
+  assert.strictEqual(res.status, 200);
+  const newBuffer = await fs.readFile(filePath);
+  assert.ok(newBuffer.equals(originalBuffer), 'v1 recipe must re-render byte-identically');
+});
+
+test('preview rejects an unknown swatch with 400', async () => {
+  const res = await postJson('/api/collage/preview', {
+    recipe: makeRecipe({ matte: { swatch: 'neon-pink', borderWidth: 120 } })
+  });
+  assert.strictEqual(res.status, 400);
+  const body = await res.json();
+  assert.match(body.error, /swatch/i);
+});
+
+test('preview accepts a sparse v2 recipe with toggles and new swatches', async () => {
+  const res = await postJson('/api/collage/preview', {
+    recipe: makeRecipe({
+      matte: {
+        swatch: 'warm-grey-white', borderWidth: 220,
+        depthStyle: 'double', texture: 'weave', dropShadow: false, depth: true
+      }
+    })
+  });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.headers.get('content-type'), 'image/jpeg');
+});
+
 test('preview rejects an invalid recipe with 400', async () => {
   const res = await postJson('/api/collage/preview', {
     recipe: makeRecipe({ template: 'bogus' })
@@ -214,7 +283,7 @@ test('put re-renders an existing collage in place with the edited recipe', async
   assert.ok(!newBuffer.equals(originalBuffer), 'JPG must be replaced in place');
 
   const entry = (await readMetadata()).images[filename];
-  assert.strictEqual(entry.collageRecipe.matte.preset, 'museum-black');
+  assert.strictEqual(entry.collageRecipe.matte.swatch, 'museum-black');
   assert.strictEqual(entry.collageRecipe.matte.borderWidth, 200);
 });
 
@@ -248,7 +317,7 @@ test('auto builds and saves a collage unattended from a tag pool', async () => {
   assert.ok(entry, 'auto collage must be registered');
   assert.deepStrictEqual(entry.tags, ['auto-collage']);
   assert.strictEqual(entry.collageRecipe.template, 'diptych-2');
-  assert.strictEqual(entry.collageRecipe.matte.preset, 'ivory');
+  assert.strictEqual(entry.collageRecipe.matte.swatch, 'ivory');
 
   // Slots drawn from tagged portraits only (never the landscape, never other collages)
   entry.collageRecipe.slots.forEach(slot => {
@@ -294,7 +363,7 @@ test('suggest returns a renderable recipe without saving anything', async () => 
   const body = await res.json();
   assert.ok(body.recipe, 'response must include a recipe');
   assert.strictEqual(body.recipe.template, 'diptych-2');
-  assert.strictEqual(body.recipe.matte.preset, 'ivory');
+  assert.strictEqual(body.recipe.matte.swatch, 'ivory');
   assert.strictEqual(body.recipe.slots.length, 2);
   body.recipe.slots.forEach(slot => {
     assert.ok(
@@ -316,7 +385,7 @@ test('suggest works with only a tagPool (random template + preset)', async () =>
   assert.strictEqual(res.status, 200);
   const body = await res.json();
   assert.ok(body.recipe.template, 'recipe must have a template');
-  assert.ok(body.recipe.matte.preset, 'recipe must have a matte preset');
+  assert.ok(body.recipe.matte.swatch, 'recipe must have a matte swatch');
   assert.ok(body.recipe.slots.length >= 2);
 });
 

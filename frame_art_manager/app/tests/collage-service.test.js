@@ -9,7 +9,7 @@ const sharp = require('sharp');
 const {
   CANVAS,
   TEMPLATES,
-  MATTE_PRESETS,
+  MATTE_SWATCHES,
   DEPTH_STYLES,
   TEXTURES,
   SOLO_WINDOW_ASPECT,
@@ -234,14 +234,96 @@ test('computeCoverCrop upscales sources smaller than the window', () => {
 
 // --- Recipe validation ---
 
-test('normalizeRecipe fills defaults for focal, preset, and borderWidth', () => {
+test('normalizeRecipe fills defaults for focal, swatch, and borderWidth', () => {
   const normalized = normalizeRecipe({
     template: 'diptych-2',
     slots: [{ imageId: 'a.jpg' }, { imageId: 'b.jpg' }]
   });
-  assert.strictEqual(normalized.matte.preset, 'gallery-white');
+  assert.strictEqual(normalized.matte.swatch, 'gallery-white');
   assert.strictEqual(typeof normalized.matte.borderWidth, 'number');
   assert.deepStrictEqual(normalized.slots[0].focal, { x: 0.5, y: 0.5 });
+});
+
+// --- Recipe v2 resolution (#9) ---
+
+test('legacy v1 recipes resolve to the full v2 matte spec', () => {
+  const normalized = normalizeRecipe(makeRecipe({
+    matte: { preset: 'museum-black', borderWidth: 100 }
+  }));
+  const swatch = MATTE_SWATCHES['museum-black'];
+  assert.strictEqual(normalized.matte.swatch, 'museum-black');
+  assert.strictEqual(normalized.matte.matteColor, swatch.matteColor);
+  assert.strictEqual(normalized.matte.bevelColor, swatch.bevelColor);
+  assert.strictEqual(normalized.matte.depthStyle, 'miter');
+  assert.strictEqual(normalized.matte.texture, 'none');
+  assert.strictEqual(normalized.matte.dropShadow, true);
+  assert.strictEqual(normalized.matte.depth, true);
+  assert.strictEqual(normalized.matte.borderWidth, 100);
+  assert.strictEqual(normalized.matte.shadowParams.bevelWidth, swatch.bevelWidth);
+  assert.strictEqual(normalized.matte.shadowParams.textureOpacity, swatch.textureOpacity);
+  assert.deepStrictEqual(normalized.matte.shadowParams.innerShadow, swatch.innerShadow);
+  assert.deepStrictEqual(normalized.matte.shadowParams.dropShadow, swatch.dropShadow);
+});
+
+test('normalizeRecipe is idempotent on resolved v2 recipes', () => {
+  const once = normalizeRecipe(makeRecipe());
+  const twice = normalizeRecipe(once);
+  assert.deepStrictEqual(twice, once);
+});
+
+test('stored resolved values win over the catalogue', () => {
+  // A saved recipe carries its render params; re-tuning the catalogue must
+  // not change what an already-saved collage renders.
+  const normalized = normalizeRecipe(makeRecipe({
+    matte: {
+      swatch: 'gallery-white',
+      matteColor: '#123456',
+      bevelColor: '#654321',
+      borderWidth: 120,
+      shadowParams: {
+        bevelWidth: 20,
+        innerShadow: { opacity: 0.9 },
+        dropShadow: { blur: 40 }
+      }
+    }
+  }));
+  assert.strictEqual(normalized.matte.matteColor, '#123456');
+  assert.strictEqual(normalized.matte.bevelColor, '#654321');
+  assert.strictEqual(normalized.matte.shadowParams.bevelWidth, 20);
+  assert.strictEqual(normalized.matte.shadowParams.innerShadow.opacity, 0.9);
+  // Missing nested fields still fill from the swatch
+  assert.strictEqual(
+    normalized.matte.shadowParams.innerShadow.blur,
+    MATTE_SWATCHES['gallery-white'].innerShadow.blur
+  );
+  assert.strictEqual(normalized.matte.shadowParams.dropShadow.blur, 40);
+  assert.strictEqual(
+    normalized.matte.shadowParams.dropShadow.opacity,
+    MATTE_SWATCHES['gallery-white'].dropShadow.opacity
+  );
+});
+
+test('normalizeRecipe rejects malformed colour overrides', () => {
+  assert.throws(
+    () => normalizeRecipe(makeRecipe({ matte: { swatch: 'ivory', matteColor: 'red' } })),
+    /matteColor/
+  );
+  assert.throws(
+    () => normalizeRecipe(makeRecipe({ matte: { swatch: 'ivory', bevelColor: '#12345' } })),
+    /bevelColor/
+  );
+});
+
+test('dropShadow and depth toggles default true and honor false', () => {
+  const defaults = normalizeRecipe(makeRecipe()).matte;
+  assert.strictEqual(defaults.dropShadow, true);
+  assert.strictEqual(defaults.depth, true);
+
+  const flat = normalizeRecipe(makeRecipe({
+    matte: { swatch: 'ivory', dropShadow: false, depth: false, borderWidth: 120 }
+  })).matte;
+  assert.strictEqual(flat.dropShadow, false);
+  assert.strictEqual(flat.depth, false);
 });
 
 test('normalizeRecipe defaults depthStyle to miter and texture to none', () => {
@@ -287,11 +369,15 @@ test('normalizeRecipe clamps focal and borderWidth into range', () => {
   assert.strictEqual(normalized.slots[1].focal.x, 0.25);
 });
 
-test('normalizeRecipe rejects unknown templates and presets', () => {
+test('normalizeRecipe rejects unknown templates and swatches', () => {
   assert.throws(() => normalizeRecipe(makeRecipe({ template: 'freeform' })), /template/i);
   assert.throws(
     () => normalizeRecipe(makeRecipe({ matte: { preset: 'neon-pink', borderWidth: 120 } })),
-    /preset/i
+    /swatch/i
+  );
+  assert.throws(
+    () => normalizeRecipe(makeRecipe({ matte: { swatch: 'neon-pink', borderWidth: 120 } })),
+    /swatch/i
   );
 });
 
@@ -308,14 +394,29 @@ test('normalizeRecipe rejects slot count mismatch and missing imageId', () => {
   );
 });
 
-test('TEMPLATES and MATTE_PRESETS expose the required entries', () => {
+test('TEMPLATES and MATTE_SWATCHES expose the required entries', () => {
   for (const name of ['diptych-2', 'triptych-3', 'grid-2x2', 'hero-left']) {
     assert.ok(TEMPLATES[name], `missing template ${name}`);
     assert.ok(TEMPLATES[name].slotCount >= 2);
   }
-  for (const name of ['gallery-white', 'ivory', 'museum-black']) {
-    assert.ok(MATTE_PRESETS[name], `missing preset ${name}`);
-    assert.ok(/^#[0-9a-f]{6}$/i.test(MATTE_PRESETS[name].matteColor));
+  // The v1 presets plus the #9 off-white family must all exist.
+  const required = [
+    'gallery-white', 'ivory', 'museum-black',
+    'museum-white', 'antique-white', 'warm-grey-white', 'cool-white'
+  ];
+  for (const name of required) {
+    assert.ok(MATTE_SWATCHES[name], `missing swatch ${name}`);
+  }
+  for (const [name, swatch] of Object.entries(MATTE_SWATCHES)) {
+    assert.ok(/^#[0-9a-f]{6}$/i.test(swatch.matteColor), `matteColor for ${name}`);
+    assert.ok(/^#[0-9a-f]{6}$/i.test(swatch.bevelColor), `bevelColor for ${name}`);
+    assert.ok(swatch.bevelWidth > 0, `bevelWidth for ${name}`);
+    for (const key of ['opacity', 'blur', 'offsetY']) {
+      assert.ok(Number.isFinite(swatch.innerShadow[key]), `innerShadow.${key} for ${name}`);
+    }
+    for (const key of ['opacity', 'blur', 'offsetY', 'spread']) {
+      assert.ok(Number.isFinite(swatch.dropShadow[key]), `dropShadow.${key} for ${name}`);
+    }
   }
 });
 
@@ -373,7 +474,7 @@ test('INTEGRATION: matte color shows at the canvas corner, photo inside the wind
   };
 
   // Corner (10,10) sits well inside the 120px border: expect gallery-white matte
-  const matte = MATTE_PRESETS['gallery-white'].matteColor;
+  const matte = MATTE_SWATCHES['gallery-white'].matteColor;
   const expected = [
     parseInt(matte.slice(1, 3), 16),
     parseInt(matte.slice(3, 5), 16),
@@ -445,6 +546,60 @@ test('INTEGRATION: identical recipe and sources render byte-identical output', a
   const first = await renderPreview(makeRecipe(), sources);
   const second = await renderPreview(makeRecipe(), sources);
   assert.ok(first.buffer.equals(second.buffer), 'renders should be deterministic');
+});
+
+test('INTEGRATION: legacy v1 recipe and its resolved v2 form render byte-identically', async () => {
+  const a = await createSampleImage('a.jpg', 1200, 1600, { r: 200, g: 40, b: 40 });
+  const b = await createSampleImage('b.jpg', 1600, 1200, { r: 40, g: 200, b: 40 });
+  const sources = { 'a.jpg': a, 'b.jpg': b };
+
+  for (const preset of ['gallery-white', 'ivory', 'museum-black']) {
+    const legacy = makeRecipe({ matte: { preset, borderWidth: 120 } });
+    const resolved = normalizeRecipe(legacy);
+    const legacyRender = await renderPreview(legacy, sources);
+    const resolvedRender = await renderPreview(resolved, sources);
+    assert.ok(
+      legacyRender.buffer.equals(resolvedRender.buffer),
+      `${preset}: legacy and resolved renders should be byte-identical`
+    );
+  }
+});
+
+test('INTEGRATION: dropShadow and depth toggles change the render', async () => {
+  const a = await createSampleImage('a.jpg', 1200, 1600, { r: 200, g: 40, b: 40 });
+  const b = await createSampleImage('b.jpg', 1600, 1200, { r: 40, g: 200, b: 40 });
+  const sources = { 'a.jpg': a, 'b.jpg': b };
+
+  const variants = {};
+  for (const [name, matte] of Object.entries({
+    on: { swatch: 'gallery-white', borderWidth: 120 },
+    noDrop: { swatch: 'gallery-white', borderWidth: 120, dropShadow: false },
+    noDepth: { swatch: 'gallery-white', borderWidth: 120, depth: false },
+    flat: { swatch: 'gallery-white', borderWidth: 120, dropShadow: false, depth: false }
+  })) {
+    const { buffer } = await renderPreview(makeRecipe({ matte }), sources);
+    const meta = await sharp(buffer).metadata();
+    assert.strictEqual(meta.width, 960, `${name} width`);
+    variants[name] = buffer;
+  }
+  assert.ok(!variants.on.equals(variants.noDrop), 'dropShadow off should change pixels');
+  assert.ok(!variants.on.equals(variants.noDepth), 'depth off should change pixels');
+  assert.ok(!variants.noDrop.equals(variants.flat), 'flat differs from noDrop');
+});
+
+test('INTEGRATION: every catalogue swatch renders', async () => {
+  const a = await createSampleImage('a.jpg', 1200, 1600, { r: 200, g: 40, b: 40 });
+  const b = await createSampleImage('b.jpg', 1600, 1200, { r: 40, g: 200, b: 40 });
+  const sources = { 'a.jpg': a, 'b.jpg': b };
+
+  for (const swatch of Object.keys(MATTE_SWATCHES)) {
+    const { buffer } = await renderPreview(
+      makeRecipe({ matte: { swatch, borderWidth: 120 } }),
+      sources
+    );
+    const meta = await sharp(buffer).metadata();
+    assert.strictEqual(meta.width, 960, `${swatch} width`);
+  }
 });
 
 test('INTEGRATION: all depth treatments render on light and dark mattes', async () => {

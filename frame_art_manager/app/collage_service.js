@@ -11,17 +11,32 @@ const heicConvert = require('heic-convert');
  * Pure function of (recipe, source files) — no routes, no metadata access.
  * The caller resolves each slot's imageId to a file path or Buffer.
  *
- * Recipe shape:
+ * Recipe shape (v2 — normalizeRecipe() resolves everything below):
  *   {
  *     template: 'diptych-2' | 'triptych-3' | 'grid-2x2' | 'hero-left' | 'solo',
  *     matte: {
- *       preset: 'gallery-white' | 'ivory' | 'museum-black',
- *       borderWidth: px,
+ *       swatch: key into matte_swatches.json (curated catalogue),
+ *       matteColor: '#rrggbb',                       // resolved from swatch
+ *       bevelColor: '#rrggbb',                       // resolved from swatch
  *       depthStyle: 'miter' | 'recess' | 'double',   // default 'miter'
- *       texture: 'none' | 'fibre' | 'weave'          // default 'none'
+ *       texture: 'none' | 'fibre' | 'weave',         // default 'none'
+ *       dropShadow: bool,                            // default true
+ *       depth: bool,                                 // default true (bevel + inner shadow)
+ *       borderWidth: px,
+ *       shadowParams: { textureOpacity, bevelWidth, bevelTopShadow,
+ *                       bevelBottomHighlight, innerShadow, dropShadow }
  *     },
  *     slots: [{ imageId, focal: { x: 0..1, y: 0..1 } }, ...]
  *   }
+ *
+ * Legacy (v1) recipes carry `matte.preset` and no resolved fields; they
+ * resolve to v2 on load, so every saved collage re-renders identically.
+ * Saved v2 recipes store the resolved values, which win over the catalogue —
+ * rendering a stored recipe as-is (PUT re-render, fluid promote) reproduces
+ * it byte-for-byte even after a swatch is re-tuned. The builder is the one
+ * deliberate exception: editing re-resolves from the current catalogue
+ * (matteForUi drops overrides), so the live preview always shows exactly
+ * what a re-save will render.
  *
  * All matte/shadow measurements are expressed in pixels at the 4K reference
  * canvas and scaled uniformly for preview renders, so the preview is the
@@ -71,43 +86,24 @@ const CUT_LINE_WIDTH = 2;
 
 const TEXTURE_TILE_SIZE = 512;
 
-// Shadow/bevel params are px at 4K reference scale; opacities 0..1.
-// textureOpacity is the alpha the texture tile is composited at (soft-light)
-// when the recipe selects a texture.
-const MATTE_PRESETS = {
-  'gallery-white': {
-    label: 'Gallery White',
-    matteColor: '#f4f1ea',
-    textureOpacity: 0.55,
-    bevelColor: '#fdfbf5',
-    bevelWidth: 12,
-    bevelTopShadow: 0.18,
-    bevelBottomHighlight: 0.35,
-    innerShadow: { opacity: 0.34, blur: 16, offsetY: 9 },
-    dropShadow: { opacity: 0.28, blur: 22, offsetY: 10, spread: 5 }
-  },
-  ivory: {
-    label: 'Ivory',
-    matteColor: '#f1e9d6',
-    textureOpacity: 0.6,
-    bevelColor: '#faf4e4',
-    bevelWidth: 12,
-    bevelTopShadow: 0.16,
-    bevelBottomHighlight: 0.32,
-    innerShadow: { opacity: 0.3, blur: 15, offsetY: 8 },
-    dropShadow: { opacity: 0.26, blur: 20, offsetY: 10, spread: 5 }
-  },
-  'museum-black': {
-    label: 'Museum Black',
-    matteColor: '#131311',
-    textureOpacity: 0.45,
-    bevelColor: '#3b3933',
-    bevelTopShadow: 0.4,
-    bevelBottomHighlight: 0.12,
-    bevelWidth: 10,
-    innerShadow: { opacity: 0.5, blur: 18, offsetY: 10 },
-    dropShadow: { opacity: 0.55, blur: 26, offsetY: 12, spread: 6 }
-  }
+// Curated swatch catalogue: shadow/bevel params are px at 4K reference
+// scale, opacities 0..1. textureOpacity is the alpha the texture tile is
+// composited at (soft-light) when the recipe selects a texture. Shared with
+// the client — see matte_swatches.json.
+const SWATCH_CATALOGUE = require('./matte_swatches.json');
+const MATTE_SWATCHES = SWATCH_CATALOGUE.swatches;
+const BORDER_CHIPS = SWATCH_CATALOGUE.borderChips;
+
+// The numeric shadow/bevel fields a resolved matte spec carries, with the
+// ceiling each stored override is clamped to (opacity-like fields cap at 1;
+// px-like fields share the border slider's 400px ceiling). innerShadow and
+// dropShadow are nested objects of plain numbers bounded the same way.
+const PX_MAX = 400;
+const SHADOW_PARAM_MAX = {
+  textureOpacity: 1,
+  bevelWidth: PX_MAX,
+  bevelTopShadow: 1,
+  bevelBottomHighlight: 1
 };
 
 function clamp(value, min, max) {
@@ -249,22 +245,47 @@ function computeCoverCrop(srcW, srcH, winW, winH, focal = {}) {
   return { scaledW, scaledH, left, top };
 }
 
-/**
- * Validate a recipe and fill defaults. Throws on structural problems;
- * clamps out-of-range numbers rather than rejecting them.
- */
-function normalizeRecipe(recipe) {
-  if (!recipe || typeof recipe !== 'object') {
-    throw new Error('Recipe must be an object');
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+/** A stored colour override, or the swatch's value when absent/invalid type. */
+function resolveColor(value, fallback, field) {
+  if (value === undefined || value === null) {
+    return fallback;
   }
+  if (typeof value !== 'string' || !HEX_COLOR.test(value)) {
+    throw new Error(`matte.${field} must be a #rrggbb colour, got ${JSON.stringify(value)}`);
+  }
+  return value.toLowerCase();
+}
 
-  const template = getTemplate(recipe.template);
+/** A stored number override (clamped), or the swatch's value when absent. */
+function resolveNumber(value, fallback, min, max) {
+  const num = Number(value);
+  return Number.isFinite(num) ? clamp(num, min, max) : fallback;
+}
 
-  const matte = recipe.matte || {};
-  const presetName = matte.preset || 'gallery-white';
-  if (!MATTE_PRESETS[presetName]) {
+/** Stored shadow-object override merged field-by-field over swatch defaults. */
+function resolveShadowObject(stored, defaults) {
+  const src = stored && typeof stored === 'object' ? stored : {};
+  const out = {};
+  for (const [key, fallback] of Object.entries(defaults)) {
+    out[key] = resolveNumber(src[key], fallback, 0, key === 'opacity' ? 1 : PX_MAX);
+  }
+  return out;
+}
+
+/**
+ * Resolve a recipe's matte to the full v2 spec. Accepts:
+ *  - legacy v1: { preset, borderWidth } — resolves entirely from the catalogue
+ *  - sparse v2: { swatch, ...selectors } — resolves params from the catalogue
+ *  - stored v2: fully resolved — stored values win over the catalogue
+ */
+function resolveMatte(matte) {
+  const swatchKey = matte.swatch || matte.preset || 'gallery-white';
+  const swatch = MATTE_SWATCHES[swatchKey];
+  if (!swatch) {
     throw new Error(
-      `Unknown matte preset "${presetName}". Valid presets: ${Object.keys(MATTE_PRESETS).join(', ')}`
+      `Unknown matte swatch "${swatchKey}". Valid swatches: ${Object.keys(MATTE_SWATCHES).join(', ')}`
     );
   }
 
@@ -282,10 +303,40 @@ function normalizeRecipe(recipe) {
     );
   }
 
-  const borderNum = Number(matte.borderWidth);
-  const borderWidth = Number.isFinite(borderNum)
-    ? clamp(borderNum, BORDER_WIDTH.min, BORDER_WIDTH.max)
-    : BORDER_WIDTH.default;
+  const stored = matte.shadowParams && typeof matte.shadowParams === 'object'
+    ? matte.shadowParams
+    : {};
+  const shadowParams = {};
+  for (const [key, max] of Object.entries(SHADOW_PARAM_MAX)) {
+    shadowParams[key] = resolveNumber(stored[key], swatch[key], 0, max);
+  }
+  shadowParams.innerShadow = resolveShadowObject(stored.innerShadow, swatch.innerShadow);
+  shadowParams.dropShadow = resolveShadowObject(stored.dropShadow, swatch.dropShadow);
+
+  return {
+    swatch: swatchKey,
+    matteColor: resolveColor(matte.matteColor, swatch.matteColor, 'matteColor'),
+    bevelColor: resolveColor(matte.bevelColor, swatch.bevelColor, 'bevelColor'),
+    depthStyle,
+    texture,
+    dropShadow: matte.dropShadow !== false,
+    depth: matte.depth !== false,
+    borderWidth: resolveNumber(matte.borderWidth, BORDER_WIDTH.default, BORDER_WIDTH.min, BORDER_WIDTH.max),
+    shadowParams
+  };
+}
+
+/**
+ * Validate a recipe and resolve it to the fully-specified v2 form. Throws on
+ * structural problems; clamps out-of-range numbers rather than rejecting them.
+ */
+function normalizeRecipe(recipe) {
+  if (!recipe || typeof recipe !== 'object') {
+    throw new Error('Recipe must be an object');
+  }
+
+  const template = getTemplate(recipe.template);
+  const matte = resolveMatte(recipe.matte || {});
 
   const slots = Array.isArray(recipe.slots) ? recipe.slots : [];
   if (slots.length !== template.slotCount) {
@@ -307,7 +358,7 @@ function normalizeRecipe(recipe) {
 
   return {
     template: recipe.template,
-    matte: { preset: presetName, borderWidth, depthStyle, texture },
+    matte,
     slots: normalizedSlots
   };
 }
@@ -361,10 +412,10 @@ function luminance(hex) {
 }
 
 /** The double treatment's reveal band: a near-tone of the matte colour. */
-function revealColor(preset) {
-  return luminance(preset.matteColor) > 0.5
-    ? shade(preset.matteColor, -0.07)
-    : shade(preset.matteColor, 0.12);
+function revealColor(spec) {
+  return luminance(spec.matteColor) > 0.5
+    ? shade(spec.matteColor, -0.07)
+    : shade(spec.matteColor, 0.12);
 }
 
 function rectPath(x, y, w, h) {
@@ -379,8 +430,8 @@ function svgDocument(width, height, body) {
 }
 
 /** Soft drop shadows behind each print, composited before the photos. */
-function buildDropShadowSvg(width, height, windows, preset, scale) {
-  const { opacity, blur, offsetY, spread } = preset.dropShadow;
+function buildDropShadowSvg(width, height, windows, spec, scale) {
+  const { opacity, blur, offsetY, spread } = spec.dropShadow;
   const blurPx = Math.max(0.5, blur * scale);
   const dy = offsetY * scale;
   const sp = spread * scale;
@@ -412,8 +463,8 @@ function insetRect(win, inset) {
  * print, outermost first. Band widths are clamped so the print never
  * collapses to nothing.
  */
-function depthBands(preset, depthStyle, scale, win) {
-  const base = Math.max(1, Math.round(preset.bevelWidth * scale));
+function depthBands(spec, depthStyle, scale, win) {
+  const base = Math.max(1, Math.round(spec.bevelWidth * scale));
   const maxTotal = Math.max(1, Math.floor(Math.min(win.width, win.height) / 2) - 1);
 
   if (depthStyle === 'double') {
@@ -444,25 +495,25 @@ function depthBands(preset, depthStyle, scale, win) {
  * Uniform insets make the seams meet at 45°. Top face sits in shadow,
  * bottom catches light (top-lit shadowbox), left/right at half strength.
  */
-function miterFaces(outer, inner, preset) {
+function miterFaces(outer, inner, spec) {
   const oL = outer.x, oT = outer.y, oR = outer.x + outer.w, oB = outer.y + outer.h;
   const iL = inner.x, iT = inner.y, iR = inner.x + inner.w, iB = inner.y + inner.h;
-  const c = preset.bevelColor;
+  const c = spec.bevelColor;
   const face = (points, fill) => `<polygon points="${points}" fill="${fill}"/>`;
   return (
-    face(`${oL},${oT} ${oR},${oT} ${iR},${iT} ${iL},${iT}`, shade(c, -preset.bevelTopShadow)) +
-    face(`${oL},${oT} ${iL},${iT} ${iL},${iB} ${oL},${oB}`, shade(c, -preset.bevelTopShadow * 0.55)) +
-    face(`${oL},${oB} ${iL},${iB} ${iR},${iB} ${oR},${oB}`, shade(c, preset.bevelBottomHighlight)) +
-    face(`${oR},${oT} ${oR},${oB} ${iR},${iB} ${iR},${iT}`, shade(c, preset.bevelBottomHighlight * 0.5))
+    face(`${oL},${oT} ${oR},${oT} ${iR},${iT} ${iL},${iT}`, shade(c, -spec.bevelTopShadow)) +
+    face(`${oL},${oT} ${iL},${iT} ${iL},${iB} ${oL},${oB}`, shade(c, -spec.bevelTopShadow * 0.55)) +
+    face(`${oL},${oB} ${iL},${iB} ${iR},${iB} ${oR},${oB}`, shade(c, spec.bevelBottomHighlight)) +
+    face(`${oR},${oT} ${oR},${oB} ${iR},${iB} ${iR},${iT}`, shade(c, spec.bevelBottomHighlight * 0.5))
   );
 }
 
 /** Hairline where the matte board was cut, along a rect's edge. */
-function cutLine(rect, preset, scale, opacity) {
+function cutLine(rect, spec, scale, opacity) {
   const w = Math.max(1, Math.round(CUT_LINE_WIDTH * scale));
   return (
     `<rect x="${rect.x}" y="${rect.y}" width="${rect.w}" height="${rect.h}" ` +
-    `fill="none" stroke="${shade(preset.bevelColor, -0.45)}" ` +
+    `fill="none" stroke="${shade(spec.bevelColor, -0.45)}" ` +
     `stroke-opacity="${opacity}" stroke-width="${w}"/>`
   );
 }
@@ -473,8 +524,8 @@ function cutLine(rect, preset, scale, opacity) {
  * (mitered faces / reveal ring) overlapping the print edge, plus the
  * recess treatment's top-weighted gradient and corner occlusion.
  */
-function buildWindowEffectsSvg(width, height, windows, preset, scale, depthStyle) {
-  const { opacity, blur, offsetY } = preset.innerShadow;
+function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) {
+  const { opacity, blur, offsetY } = spec.innerShadow;
   const blurPx = Math.max(0.5, blur * scale);
   const dy = offsetY * scale;
   const pad = Math.ceil(blurPx * 4);
@@ -507,7 +558,7 @@ function buildWindowEffectsSvg(width, height, windows, preset, scale, depthStyle
   const parts = [];
 
   windows.forEach((win, i) => {
-    const bands = depthBands(preset, depthStyle, scale, win);
+    const bands = depthBands(spec, depthStyle, scale, win);
     const totalInset = bands.reduce((sum, band) => sum + band.width, 0);
     const inner = insetRect(win, totalInset);
 
@@ -550,22 +601,22 @@ function buildWindowEffectsSvg(width, height, windows, preset, scale, depthStyle
       const outerRect = insetRect(win, cursor);
       const innerRect = insetRect(win, cursor + band.width);
       if (band.kind === 'bevel') {
-        parts.push(miterFaces(outerRect, innerRect, preset));
+        parts.push(miterFaces(outerRect, innerRect, spec));
       } else {
         const ring =
           rectPath(outerRect.x, outerRect.y, outerRect.w, outerRect.h) +
           rectPath(innerRect.x, innerRect.y, innerRect.w, innerRect.h);
-        parts.push(`<path d="${ring}" fill-rule="evenodd" fill="${revealColor(preset)}"/>`);
+        parts.push(`<path d="${ring}" fill-rule="evenodd" fill="${revealColor(spec)}"/>`);
       }
       cursor += band.width;
     }
 
     // Cut line where the matte surface was cut, plus a fainter one at the
     // double treatment's inner matte cut.
-    parts.push(cutLine(insetRect(win, 0), preset, scale, 0.55));
+    parts.push(cutLine(insetRect(win, 0), spec, scale, 0.55));
     if (bands.length > 1) {
       const innerCutInset = bands[0].width + bands[1].width;
-      parts.push(cutLine(insetRect(win, innerCutInset), preset, scale, 0.35));
+      parts.push(cutLine(insetRect(win, innerCutInset), spec, scale, 0.35));
     }
   });
 
@@ -577,12 +628,12 @@ function buildWindowEffectsSvg(width, height, windows, preset, scale, depthStyle
  * show the same weave, smaller) with the swatch's opacity baked into its
  * alpha. Composited with tile:true + soft-light over the matte.
  */
-async function buildTextureTile(texture, preset, scale) {
+async function buildTextureTile(texture, spec, scale) {
   const tilePath = path.join(__dirname, 'assets', `texture-${texture}.png`);
   const size = Math.max(16, Math.round(TEXTURE_TILE_SIZE * scale));
   return sharp(tilePath)
     .resize(size, size, { kernel: sharp.kernel.lanczos3 })
-    .ensureAlpha(clamp(preset.textureOpacity, 0, 1))
+    .ensureAlpha(clamp(spec.textureOpacity, 0, 1))
     .png()
     .toBuffer();
 }
@@ -627,7 +678,12 @@ async function renderSlotImage(sourceBuffer, win, focal) {
  */
 async function renderCollage(recipe, sources, options = {}) {
   const normalized = normalizeRecipe(recipe);
-  const preset = MATTE_PRESETS[normalized.matte.preset];
+  // Flat spec in the shape the SVG builders take: colours + shadow params.
+  const spec = {
+    matteColor: normalized.matte.matteColor,
+    bevelColor: normalized.matte.bevelColor,
+    ...normalized.matte.shadowParams
+  };
 
   const width = Math.round(clamp(Number(options.width) || CANVAS.width, 96, CANVAS.width));
   const scale = width / CANVAS.width;
@@ -659,21 +715,23 @@ async function renderCollage(recipe, sources, options = {}) {
     return { input, left: windows[i].left, top: windows[i].top };
   }));
 
-  const dropShadowSvg = buildDropShadowSvg(width, height, windows, preset, scale);
-  const effectsSvg = buildWindowEffectsSvg(
-    width, height, windows, preset, scale, normalized.matte.depthStyle
-  );
-
   const composites = [];
   if (normalized.matte.texture !== 'none') {
-    const tile = await buildTextureTile(normalized.matte.texture, preset, scale);
+    const tile = await buildTextureTile(normalized.matte.texture, spec, scale);
     composites.push({ input: tile, tile: true, blend: 'soft-light' });
   }
-  composites.push(
-    { input: dropShadowSvg, blend: 'over' },
-    ...slotLayers.map(layer => ({ ...layer, blend: 'over' })),
-    { input: effectsSvg, blend: 'over' }
-  );
+  // dropShadow off = flat-mount look; depth off = no bevel/inner shadow at
+  // all (the print sits flush with the matte).
+  if (normalized.matte.dropShadow) {
+    composites.push({ input: buildDropShadowSvg(width, height, windows, spec, scale), blend: 'over' });
+  }
+  composites.push(...slotLayers.map(layer => ({ ...layer, blend: 'over' })));
+  if (normalized.matte.depth) {
+    const effectsSvg = buildWindowEffectsSvg(
+      width, height, windows, spec, scale, normalized.matte.depthStyle
+    );
+    composites.push({ input: effectsSvg, blend: 'over' });
+  }
 
   const quality = width >= CANVAS.width ? JPEG_QUALITY_FULL : JPEG_QUALITY_PREVIEW;
 
@@ -682,7 +740,7 @@ async function renderCollage(recipe, sources, options = {}) {
       width,
       height,
       channels: 3,
-      background: hexToRgb(preset.matteColor)
+      background: hexToRgb(spec.matteColor)
     }
   })
     .composite(composites)
@@ -702,7 +760,8 @@ module.exports = {
   PREVIEW_WIDTH,
   BORDER_WIDTH,
   TEMPLATES,
-  MATTE_PRESETS,
+  MATTE_SWATCHES,
+  BORDER_CHIPS,
   DEPTH_STYLES,
   TEXTURES,
   SOLO_WINDOW_ASPECT,

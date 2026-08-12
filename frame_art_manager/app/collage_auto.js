@@ -9,7 +9,7 @@
 const {
   BORDER_WIDTH,
   TEMPLATES,
-  MATTE_PRESETS,
+  MATTE_SWATCHES,
   computeLayout,
   normalizeRecipe
 } = require('./collage_service');
@@ -80,7 +80,8 @@ function shuffle(items, rng) {
  * @param {object} opts.images       metadata.json images map (filename to entry)
  * @param {string[]} opts.tagPool    tags to draw photos from (required)
  * @param {string} [opts.template]   template key; random compatible one if omitted
- * @param {string} [opts.mattePreset] matte preset key; random if omitted
+ * @param {string} [opts.mattePreset] matte swatch key; random if omitted
+ *                                    (param name kept for HA automation compat)
  * @param {function} [opts.rng]      0..1 random source (injectable for tests)
  * @returns normalized recipe
  */
@@ -94,9 +95,9 @@ function buildAutoRecipe({ images, tagPool, template, mattePreset, rng = Math.ra
       `Unknown collage template "${template}". Valid templates: ${Object.keys(TEMPLATES).join(', ')}`
     );
   }
-  if (mattePreset !== undefined && !MATTE_PRESETS[mattePreset]) {
+  if (mattePreset !== undefined && !MATTE_SWATCHES[mattePreset]) {
     throw badRequest(
-      `Unknown matte preset "${mattePreset}". Valid presets: ${Object.keys(MATTE_PRESETS).join(', ')}`
+      `Unknown matte preset "${mattePreset}". Valid presets: ${Object.keys(MATTE_SWATCHES).join(', ')}`
     );
   }
 
@@ -119,12 +120,13 @@ function buildAutoRecipe({ images, tagPool, template, mattePreset, rng = Math.ra
   }
 
   const chosen = feasible[Math.floor(rng() * feasible.length)];
-  const preset = mattePreset || Object.keys(MATTE_PRESETS)[Math.floor(rng() * Object.keys(MATTE_PRESETS).length)];
+  const swatchKeys = Object.keys(MATTE_SWATCHES);
+  const swatch = mattePreset || swatchKeys[Math.floor(rng() * swatchKeys.length)];
   const picks = shuffle(chosen.eligible, rng).slice(0, TEMPLATES[chosen.key].slotCount);
 
   return normalizeRecipe({
     template: chosen.key,
-    matte: { preset, borderWidth: BORDER_WIDTH.default },
+    matte: { swatch, borderWidth: BORDER_WIDTH.default },
     slots: picks.map(({ imageId }) => ({ imageId, focal: { x: 0.5, y: 0.5 } }))
   });
 }

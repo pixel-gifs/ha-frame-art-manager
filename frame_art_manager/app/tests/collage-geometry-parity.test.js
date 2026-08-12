@@ -25,17 +25,56 @@ function test(name, fn) {
 
 let client;
 
-test('client exports the same template and matte preset keys', () => {
+test('client exports the same template and matte swatch catalogue', () => {
   assert.deepStrictEqual(Object.keys(client.TEMPLATES), Object.keys(server.TEMPLATES));
   for (const [key, tpl] of Object.entries(server.TEMPLATES)) {
     assert.strictEqual(client.TEMPLATES[key].slotCount, tpl.slotCount, `slotCount for ${key}`);
     assert.strictEqual(client.TEMPLATES[key].label, tpl.label, `label for ${key}`);
   }
-  assert.deepStrictEqual(Object.keys(client.MATTE_PRESETS), Object.keys(server.MATTE_PRESETS));
-  for (const [key, preset] of Object.entries(server.MATTE_PRESETS)) {
-    assert.strictEqual(client.MATTE_PRESETS[key].label, preset.label, `label for ${key}`);
-    assert.strictEqual(client.MATTE_PRESETS[key].matteColor, preset.matteColor, `matteColor for ${key}`);
+  // Both sides load matte_swatches.json, so the full catalogue — colours,
+  // bevels, shadow params — must be deep-equal, not just same-keyed.
+  assert.deepStrictEqual(client.MATTE_SWATCHES, server.MATTE_SWATCHES);
+  assert.deepStrictEqual(client.BORDER_CHIPS, server.BORDER_CHIPS);
+});
+
+test('normalized v2 matte keys resolve from catalogue entries the client can select', () => {
+  for (const key of Object.keys(server.MATTE_SWATCHES)) {
+    const normalized = server.normalizeRecipe({
+      template: 'solo',
+      matte: { swatch: key },
+      slots: [{ imageId: 'x.jpg' }]
+    });
+    assert.strictEqual(normalized.matte.swatch, key);
+    assert.strictEqual(normalized.matte.matteColor, server.MATTE_SWATCHES[key].matteColor);
+    assert.strictEqual(normalized.matte.bevelColor, server.MATTE_SWATCHES[key].bevelColor);
+    assert.deepStrictEqual(
+      normalized.matte.shadowParams.innerShadow,
+      server.MATTE_SWATCHES[key].innerShadow
+    );
+    assert.deepStrictEqual(
+      normalized.matte.shadowParams.dropShadow,
+      server.MATTE_SWATCHES[key].dropShadow
+    );
   }
+});
+
+test('client matteForUi round-trips legacy and resolved mattes to selector fields', () => {
+  const legacy = client.matteForUi({ preset: 'museum-black', borderWidth: 60 });
+  assert.strictEqual(legacy.swatch, 'museum-black');
+  assert.strictEqual(legacy.borderWidth, 60);
+  assert.strictEqual(legacy.depthStyle, 'miter');
+  assert.strictEqual(legacy.texture, 'none');
+  assert.strictEqual(legacy.dropShadow, true);
+  assert.strictEqual(legacy.depth, true);
+
+  const resolved = server.normalizeRecipe({
+    template: 'solo',
+    matte: { swatch: 'sage', depthStyle: 'double', texture: 'weave', dropShadow: false, depth: false, borderWidth: 220 },
+    slots: [{ imageId: 'x.jpg' }]
+  }).matte;
+  assert.deepStrictEqual(client.matteForUi(resolved), {
+    swatch: 'sage', borderWidth: 220, depthStyle: 'double', texture: 'weave', dropShadow: false, depth: false
+  });
 });
 
 test('client canvas and border bounds match the server', () => {
