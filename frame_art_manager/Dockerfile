@@ -7,9 +7,12 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apk add --no-cache nodejs npm
 
-WORKDIR /collage-ui
+# Mirror the repo layout: the UI imports ../../matte_swatches.json (the
+# shared swatch catalogue), so the build stage needs app/ as its parent.
+WORKDIR /build/app/collage-ui
 COPY app/collage-ui/package*.json ./
 RUN npm ci --no-audit --no-fund
+COPY app/matte_swatches.json /build/app/matte_swatches.json
 COPY app/collage-ui/ ./
 RUN npm run build
 
@@ -45,7 +48,7 @@ RUN npm ci --only=production
 COPY app/ ./
 
 # Compiled collage builder from the build stage (served at /collage)
-COPY --from=collage-ui-build /collage-ui/dist ./collage-ui/dist
+COPY --from=collage-ui-build /build/app/collage-ui/dist ./collage-ui/dist
 
 # Create run script
 COPY run.sh /
