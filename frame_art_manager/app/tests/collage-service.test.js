@@ -608,6 +608,38 @@ test('INTEGRATION: depth toggle changes the render; legacy dropShadow flag does 
   assert.ok(variants.on.equals(variants.noDrop), 'dropShadow flag must not change pixels');
 });
 
+test('INTEGRATION: inner shadows stay at the window edge, print centre unchanged', async () => {
+  // Regression: a malformed donut hole once collapsed the umbra/penumbra
+  // rings into full-window fills, uniformly darkening every print (~19%).
+  const src = await createSampleImage('flat.jpg', 1200, 1600, { r: 180, g: 170, b: 160 });
+  const { buffer } = await renderCollage(
+    { template: 'solo', matte: { swatch: 'gallery-white', borderWidth: 220 }, slots: [{ imageId: 'flat.jpg' }] },
+    { 'flat.jpg': src }
+  );
+  const raw = await sharp(buffer).raw().toBuffer({ resolveWithObject: true });
+  const px = (x, y) => {
+    const i = (y * raw.info.width + x) * raw.info.channels;
+    return [raw.data[i], raw.data[i + 1], raw.data[i + 2]];
+  };
+  const win = computeLayout('solo', 220, 1, 'portrait')[0];
+  const cx = win.left + Math.floor(win.width / 2);
+  const cy = win.top + Math.floor(win.height / 2);
+
+  const centre = px(cx, cy);
+  for (const [i, expected] of [[0, 180], [1, 170], [2, 160]]) {
+    assert.ok(
+      Math.abs(centre[i] - expected) <= 8,
+      `print centre channel ${i}: got ${centre[i]}, expected ~${expected} (uniform darkening regression)`
+    );
+  }
+
+  // The shadow band exists near the top cut but has fully decayed by 80px in
+  const nearEdge = px(cx, win.top + 18);
+  const inside = px(cx, win.top + 80);
+  assert.ok(nearEdge[0] < centre[0] - 8, 'expected an edge shadow band near the cut');
+  assert.ok(Math.abs(inside[0] - centre[0]) <= 4, 'shadow must decay within the edge band');
+});
+
 test('INTEGRATION: tuning overrides change the render', async () => {
   const a = await createSampleImage('a.jpg', 1200, 1600, { r: 200, g: 40, b: 40 });
   const b = await createSampleImage('b.jpg', 1600, 1200, { r: 40, g: 200, b: 40 });

@@ -599,7 +599,9 @@ function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) 
       if (opacity <= 0) return '';
       const maxSpread = Math.floor(Math.min(inner.w, inner.h) / 2) - 1;
       const s = Math.min(Math.round(spread * scale), Math.max(0, maxSpread));
-      const hole = insetRect(inner, s);
+      // inner is already an {x,y,w,h} rect — inset it directly (insetRect
+      // takes window-shaped {left,top,width,height} rects).
+      const hole = { x: inner.x + s, y: inner.y + s, w: inner.w - 2 * s, h: inner.h - 2 * s };
       const donut =
         rectPath(inner.x - pad, inner.y - pad, inner.w + 2 * pad, inner.h + 2 * pad) +
         rectPath(hole.x, hole.y, hole.w, hole.h);
