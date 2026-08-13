@@ -454,6 +454,82 @@ Content-Type: application/json
 
 Same auto-pair selection as `/auto`, but nothing is rendered or saved — the response is just `{ "recipe": { /* recipe */ }, "skipped": [...] }` for the builder's dice-roll, ready to tweak and save through the normal flow. `template`, `mattePreset`, and `landscapeSolo` are optional.
 
+### Collage Groups
+
+A group is a standing batch config — where the photos come from, how they are
+matted, and what tag the outputs carry:
+
+```json
+{
+  "name": "hawaii",
+  "sourceTags": ["family", "maui"],
+  "outputTag": "hawaii-collage",
+  "matteSpec": { "swatch": "ivory", "borderWidth": 120 },
+  "templatePool": ["diptych-2", "triptych-3", "grid-2x2", "hero-left"],
+  "landscapeSolo": false,
+  "mode": "coverage"
+}
+```
+
+Config is persisted in `metadata.json` under `collageGroups`, with the matte
+spec stored fully resolved (a later swatch re-tuning cannot silently change
+what a group renders). `templatePool` defaults to every multi-photo template,
+`landscapeSolo` to `false`, `mode` to `coverage`. Names are 1–48 characters of
+letters, digits, hyphen or underscore — they end up in URLs and filenames.
+
+Per-run state is deliberately *not* stored here: the `lastRun` field each
+group carries in API responses lives in the server process's memory and is
+lost on restart (the durable record of a run is the batch itself). The
+separate state file called for by #7 decision 11 arrives with fluid rotation.
+
+```http
+GET    /api/collage/groups            # { "groups": [ { …group, "lastRun": … } ] }
+POST   /api/collage/groups            # 201 { "success": true, "group": … }, 409 on a duplicate name
+GET    /api/collage/groups/:name
+PUT    /api/collage/groups/:name      # renames are rejected (the name is stamped on the batch)
+DELETE /api/collage/groups/:name      # { "success": true, "keptCollages": 12 }
+```
+
+Deleting a group drops the config only; the collages it built stay in the
+library (still stamped, so re-creating the group adopts them as the batch to
+replace).
+
+#### Coverage build
+```http
+POST /api/collage/groups/:name/build
+```
+
+Renders enough collages that every source photo the group's templates can
+carry appears at least once, filling from the still-unused pool first so reuse
+only ever pads the final collage. Each output is tagged with the group's
+`outputTag` (nothing is inherited from the photos) and stamped
+`collageGroup: <name>` in `metadata.json`.
+
+The new batch is rendered and registered **in full before** the previous batch
+is deleted, so a failed run leaves yesterday's collages in place — and the
+run's own half-written files are swept up. A run that would produce nothing
+(e.g. a mistyped source tag) fails with `400` rather than emptying the group.
+Hand-made collages and other groups' batches are never touched.
+
+**Response:**
+```json
+{
+  "success": true,
+  "group": "hawaii",
+  "startedAt": "2026-08-13T04:47:00.000Z",
+  "finishedAt": "2026-08-13T04:47:32.100Z",
+  "created": [{ "filename": "collage-hawaii-diptych-2-20260813-044657.jpg",
+                "template": "diptych-2", "imageIds": ["a.jpg", "b.jpg"] }],
+  "removed": ["collage-hawaii-diptych-2-20260812-221501.jpg"],
+  "skipped": [{ "imageId": "pano.jpg", "reason": "no-fitting-window" }]
+}
+```
+
+Skip reasons: `unknown-aspect`, `no-fitting-window`, `no-fillable-template`
+(fits a window, but the pool has no compatible companions), `landscape-solo`.
+`404` for an unknown group, `400` for a group in `fluid` mode, `409` while a
+build for that group is already running.
+
 ### Static Files
 
 ```http

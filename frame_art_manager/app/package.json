@@ -15,6 +15,8 @@
     "test:collage": "node tests/collage-service.test.js",
     "test:collage-auto": "node tests/collage-auto.test.js",
     "test:collage-routes": "node tests/collage-routes.test.js",
+    "test:collage-coverage": "node tests/collage-coverage.test.js",
+    "test:collage-groups": "node tests/collage-groups.test.js",
     "test:verbose": "node tests/semantic-sync.test.js --verbose && node tests/git-sync.test.js --verbose && node tests/metadata-helper.test.js --verbose && node tests/file-coordination.test.js --verbose",
     "postinstall": "npm rebuild sharp --silent"
   },

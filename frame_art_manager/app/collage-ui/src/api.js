@@ -24,15 +24,26 @@ export function editIdFromQuery(search = window.location.search) {
   return new URLSearchParams(search).get('edit') || null;
 }
 
+/** Which top-level view to open, from /collage?view=groups */
+export function viewFromQuery(search = window.location.search) {
+  return new URLSearchParams(search).get('view') === 'groups' ? 'groups' : 'builder';
+}
+
 async function throwApiError(res, fallbackMessage) {
   let message = fallbackMessage;
+  let details = null;
   try {
     const body = await res.json();
     if (body && body.error) message = body.error;
+    // Refused requests can carry structure worth showing (a build that
+    // rendered nothing still reports why every photo was skipped).
+    if (body && body.skipped) details = { skipped: body.skipped };
   } catch {
     // Non-JSON error body — keep the fallback message
   }
-  throw new Error(message);
+  const error = new Error(message);
+  if (details) Object.assign(error, details);
+  throw error;
 }
 
 async function parseJsonOrThrow(res, fallbackMessage) {
@@ -86,4 +97,36 @@ export async function updateCollage(imageId, recipe) {
     'PUT'
   );
   return parseJsonOrThrow(res, 'Failed to update collage');
+}
+
+// --- Collage groups (#11) ---
+
+const groupUrl = (name) => `${API_BASE}/collage/groups/${encodeURIComponent(name)}`;
+
+/** Every configured group, each with this server run's last-run summary. */
+export async function fetchGroups() {
+  const res = await fetch(`${API_BASE}/collage/groups`);
+  const body = await parseJsonOrThrow(res, `GET /api/collage/groups failed (${res.status})`);
+  return body.groups || [];
+}
+
+export async function createGroup(group) {
+  const res = await postJson(`${API_BASE}/collage/groups`, group);
+  return (await parseJsonOrThrow(res, 'Failed to create the group')).group;
+}
+
+export async function updateGroup(name, group) {
+  const res = await postJson(groupUrl(name), group, 'PUT');
+  return (await parseJsonOrThrow(res, 'Failed to save the group')).group;
+}
+
+export async function deleteGroup(name) {
+  const res = await fetch(groupUrl(name), { method: 'DELETE' });
+  return parseJsonOrThrow(res, 'Failed to delete the group');
+}
+
+/** Run a coverage build: renders a fresh batch, then replaces the old one. */
+export async function buildGroup(name) {
+  const res = await postJson(`${groupUrl(name)}/build`, {});
+  return parseJsonOrThrow(res, 'Failed to build the group');
 }

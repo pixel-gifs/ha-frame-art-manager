@@ -491,6 +491,26 @@ class MetadataHelper {
   }
 
   /**
+   * Collage group configs (see collage_groups.js). Config only — per-run
+   * state such as last-run summaries never enters the git-synced metadata.
+   */
+  async getCollageGroups() {
+    const metadata = await this.readMetadata();
+    return Array.isArray(metadata.collageGroups) ? metadata.collageGroups : [];
+  }
+
+  /**
+   * Replace the whole group list (read-modify-write, like every other
+   * metadata mutation here).
+   */
+  async saveCollageGroups(groups) {
+    const metadata = await this.readMetadata();
+    metadata.collageGroups = groups;
+    await this.writeMetadata(metadata);
+    return metadata.collageGroups;
+  }
+
+  /**
    * Get settings (with defaults)
    */
   async getSettings() {

@@ -17,9 +17,15 @@ const {
   TEMPLATES,
   MATTE_SWATCHES,
   computeLayout,
+  getTemplate,
   normalizeRecipe,
   soloOrientation
 } = require('./collage_service');
+
+// Templates a random or coverage build may reach for when the caller names
+// none. Solo is opt-in: a 1-up is asked for by name, or routed to by the
+// landscapeSolo split.
+const MULTI_TEMPLATES = Object.keys(TEMPLATES).filter(key => key !== 'solo');
 
 // A photo is usable in a window when cover-cropping keeps at least this
 // fraction of it (1 = aspect matches exactly, lower = more cropped away).
@@ -31,16 +37,28 @@ const MIN_CROP_RETENTION = 0.5;
 const SKIP_REASONS = {
   unknownAspect: 'unknown-aspect',      // no dimensions to fit windows with
   noFittingWindow: 'no-fitting-window', // every window crops it below the floor
-  landscapeSolo: 'landscape-solo'       // set aside by the landscapeSolo split:
+  landscapeSolo: 'landscape-solo',      // set aside by the landscapeSolo split:
                                         // a landscape barred from a multi-photo
                                         // template, or a portrait left out of a
                                         // build that exists to carry landscapes
+  noFillableTemplate: 'no-fillable-template' // fits a window, but the pool has
+                                        // too few compatible companions to
+                                        // complete any template around it
 };
 
 function badRequest(message) {
   const error = new Error(message);
   error.statusCode = 400;
   return error;
+}
+
+/** A caller-supplied template key, as a 400 rather than a 500. */
+function assertTemplate(key) {
+  try {
+    getTemplate(key);
+  } catch (error) {
+    throw badRequest(error.message);
+  }
 }
 
 function entryAspect(entry) {
@@ -94,33 +112,39 @@ function poolCandidates(images, tagPool) {
 }
 
 /**
- * Assign distinct candidates to a multi-window template's windows so that
- * every window gets an image it fits — a bipartite matching (Kuhn's augmenting
- * paths) over the image↔window "fits" relation. Each window prefers its
- * best-retention candidate, so a feasible layout also looks like a good one.
+ * Assign distinct candidates to a set of window aspects so that every window
+ * gets an image it fits — a bipartite matching (Kuhn's augmenting paths) over
+ * the image↔window "fits" relation. Each window prefers its best-retention
+ * candidate, so a feasible layout also looks like a good one.
  *
  * Candidate order is the caller's (pre-shuffled) order and breaks ties, which
  * keeps the whole thing deterministic for a seeded rng.
  *
- * @returns {{ picks: object[]|null, unfittable: string[] }} picks in window
- *          order, or null when no complete assignment exists.
+ * @param {number[]} aspects       window aspects, in window order
+ * @param {object[]} candidates    {imageId, aspect}, in preference order
+ * @param {object} [opts]
+ * @param {number} [opts.reserved] window index to leave empty — the caller has
+ *                                 already seated an image there (coverage
+ *                                 builds force their seed into a window)
+ * @param {number} [opts.firstTier] how many leading candidates outrank the
+ *                                 rest whatever their crop retention (a
+ *                                 coverage round puts its still-unused photos
+ *                                 in the first tier, so reuse only ever pads)
+ * @returns {object[]|null} picks in window order (the reserved slot is null),
+ *                          or null when no complete assignment exists.
  */
-function assignWindows(candidates, templateKey) {
-  const aspects = windowAspects(templateKey);
-
-  // Per window: the candidates that fit, best retention first.
+function matchWindows(aspects, candidates, { reserved = -1, firstTier = candidates.length } = {}) {
+  // Per window: the candidates that fit, preferred tier first, then best
+  // retention.
+  const tierOf = index => (index < firstTier ? 0 : 1);
   const preferences = aspects.map(winAspect =>
     candidates
       .map((candidate, index) => ({ index, retention: cropRetention(candidate.aspect, winAspect) }))
       .filter(({ retention }) => retention >= MIN_CROP_RETENTION)
-      .sort((a, b) => b.retention - a.retention || a.index - b.index)
+      .sort((a, b) =>
+        tierOf(a.index) - tierOf(b.index) || b.retention - a.retention || a.index - b.index)
       .map(({ index }) => index)
   );
-
-  const unfittable = candidates
-    .filter(({ aspect }) =>
-      !aspects.some(winAspect => cropRetention(aspect, winAspect) >= MIN_CROP_RETENTION))
-    .map(({ imageId }) => imageId);
 
   const windowOf = new Array(candidates.length).fill(-1); // candidate -> window
   const pickOf = new Array(aspects.length).fill(-1);      // window -> candidate
@@ -140,18 +164,29 @@ function assignWindows(candidates, templateKey) {
   };
 
   // every() would short-circuit; matching all windows is the point.
-  let complete = true;
   for (let win = 0; win < aspects.length; win++) {
-    if (!augment(win, new Set())) {
-      complete = false;
-      break;
-    }
+    if (win === reserved) continue;
+    if (!augment(win, new Set())) return null;
   }
 
-  return {
-    picks: complete ? pickOf.map(index => candidates[index]) : null,
-    unfittable
-  };
+  return pickOf.map(index => (index === -1 ? null : candidates[index]));
+}
+
+/**
+ * Fill one multi-window template from a candidate pool.
+ *
+ * @returns {{ picks: object[]|null, unfittable: string[] }} picks in window
+ *          order, or null when no complete assignment exists.
+ */
+function assignWindows(candidates, templateKey) {
+  const aspects = windowAspects(templateKey);
+
+  const unfittable = candidates
+    .filter(({ aspect }) =>
+      !aspects.some(winAspect => cropRetention(aspect, winAspect) >= MIN_CROP_RETENTION))
+    .map(({ imageId }) => imageId);
+
+  return { picks: matchWindows(aspects, candidates), unfittable };
 }
 
 /**
@@ -213,10 +248,8 @@ function buildAutoRecipe({
     throw badRequest('tagPool must be a non-empty array of tags');
   }
 
-  if (template && !TEMPLATES[template]) {
-    throw badRequest(
-      `Unknown collage template "${template}". Valid templates: ${Object.keys(TEMPLATES).join(', ')}`
-    );
+  if (template) {
+    assertTemplate(template);
   }
   if (mattePreset && !MATTE_SWATCHES[mattePreset]) {
     throw badRequest(
@@ -232,9 +265,7 @@ function buildAutoRecipe({
   // Random choice picks solo only when landscapeSolo needs it as a landscape
   // route; otherwise a 1-up must be asked for by name.
   const explicit = Boolean(template);
-  const templateKeys = explicit
-    ? [template]
-    : Object.keys(TEMPLATES).filter(key => key !== 'solo');
+  const templateKeys = explicit ? [template] : [...MULTI_TEMPLATES];
   if (!explicit && landscapeSolo && landscapes.length > 0) {
     templateKeys.push('solo');
   }
@@ -293,9 +324,154 @@ function buildAutoRecipe({
   return { recipe, skipped };
 }
 
+/**
+ * Seat one candidate in a template and fill the rest of its windows from the
+ * companion pool. The seed is forced in (best-retention window first) so a
+ * coverage round always advances, and companions are drawn in the caller's
+ * order — unused photos ahead of already-featured ones.
+ *
+ * @returns {{ picks: object[]|null, fits: boolean }} `fits` says whether any
+ *          window could carry the seed at all, which separates "this photo
+ *          belongs nowhere" from "this photo has no companions".
+ */
+function seatCandidate(templateKey, seed, companions, unusedCount = companions.length) {
+  if (templateKey === 'solo') {
+    const [winAspect] = windowAspects('solo', orientationOf(seed.aspect));
+    const fits = cropRetention(seed.aspect, winAspect) >= MIN_CROP_RETENTION;
+    return { picks: fits ? [seed] : null, fits };
+  }
+
+  const aspects = windowAspects(templateKey);
+  const seats = aspects
+    .map((winAspect, index) => ({ index, retention: cropRetention(seed.aspect, winAspect) }))
+    .filter(({ retention }) => retention >= MIN_CROP_RETENTION)
+    .sort((a, b) => b.retention - a.retention || a.index - b.index);
+
+  for (const { index: seat } of seats) {
+    const picks = matchWindows(aspects, companions, { reserved: seat, firstTier: unusedCount });
+    if (picks) {
+      picks[seat] = seed;
+      return { picks, fits: true };
+    }
+  }
+
+  return { picks: null, fits: seats.length > 0 };
+}
+
+/**
+ * Plan a group's coverage build: enough collages that every source image the
+ * templates can carry appears at least once.
+ *
+ * Each round takes the first not-yet-featured photo, seats it in a template
+ * that can be completed around it, and fills the remaining windows from the
+ * still-unused pool before falling back to photos that already featured — so
+ * reuse only ever pads the final collage. A photo that no round can place is
+ * reported in `skipped`; nothing is dropped in silence.
+ *
+ * @param {object} opts
+ * @param {object} opts.images          metadata.json images map
+ * @param {string[]} opts.sourceTags    tags to draw photos from (required)
+ * @param {object} [opts.matte]         the group's matte spec, used verbatim
+ * @param {string[]} [opts.templatePool] templates the build may use; every
+ *                                      multi-photo template when omitted
+ * @param {boolean} [opts.landscapeSolo] route landscapes to matted 1-ups
+ *                                      instead of multi-photo templates
+ * @param {function} [opts.rng]         0..1 random source (injectable)
+ * @returns {{ recipes: object[], skipped: Array<{imageId: string, reason: string}> }}
+ */
+function buildCoverageRecipes({
+  images,
+  sourceTags,
+  matte = {},
+  templatePool,
+  landscapeSolo = false,
+  rng = Math.random
+} = {}) {
+  if (!Array.isArray(sourceTags) || sourceTags.filter(t => String(t).trim()).length === 0) {
+    throw badRequest('sourceTags must be a non-empty array of tags');
+  }
+
+  const pool = Array.isArray(templatePool) && templatePool.length > 0
+    ? templatePool
+    : MULTI_TEMPLATES;
+  pool.forEach(assertTemplate);
+
+  const { candidates, skipped } = poolCandidates(images, sourceTags);
+  const shuffled = shuffle(candidates, rng);
+
+  // With landscapeSolo the pool splits in two, each with its own templates:
+  // landscapes get 1-ups (available whether or not the pool names solo),
+  // portraits get everything else the pool allows.
+  const multiKeys = pool.filter(key => key !== 'solo');
+  const routes = landscapeSolo
+    ? [
+      { pool: shuffled.filter(c => orientationOf(c.aspect) === 'landscape'), keys: ['solo'] },
+      {
+        pool: shuffled.filter(c => orientationOf(c.aspect) !== 'landscape'),
+        keys: pool.includes('solo') ? pool : multiKeys
+      }
+    ]
+    : [{ pool: shuffled, keys: pool }];
+
+  const recipes = [];
+
+  for (const route of routes) {
+    if (route.keys.length === 0) {
+      route.pool.forEach(({ imageId }) =>
+        skipped.push({ imageId, reason: SKIP_REASONS.noFittingWindow }));
+      continue;
+    }
+
+    const unused = route.pool.slice();
+    const featured = [];
+
+    while (unused.length > 0) {
+      const seed = unused.shift();
+      const companions = [...unused, ...featured];
+
+      let seated = null;
+      let fitsSomewhere = false;
+      for (const key of shuffle(route.keys, rng)) {
+        const attempt = seatCandidate(key, seed, companions, unused.length);
+        fitsSomewhere = fitsSomewhere || attempt.fits;
+        if (attempt.picks) {
+          seated = { key, picks: attempt.picks };
+          break;
+        }
+      }
+
+      if (!seated) {
+        skipped.push({
+          imageId: seed.imageId,
+          reason: fitsSomewhere ? SKIP_REASONS.noFillableTemplate : SKIP_REASONS.noFittingWindow
+        });
+        continue;
+      }
+
+      // Everything this collage used has now featured, and none of it is
+      // still waiting for a collage of its own.
+      for (const pick of seated.picks) {
+        const waiting = unused.indexOf(pick);
+        if (waiting !== -1) unused.splice(waiting, 1);
+        if (!featured.includes(pick)) featured.push(pick);
+      }
+
+      recipes.push(normalizeRecipe({
+        template: seated.key,
+        matte,
+        slots: seated.picks.map(({ imageId }) => ({ imageId, focal: { x: 0.5, y: 0.5 } }))
+      }));
+    }
+  }
+
+  return { recipes, skipped: skipped.sort((a, b) => a.imageId.localeCompare(b.imageId)) };
+}
+
 module.exports = {
   MIN_CROP_RETENTION,
+  MULTI_TEMPLATES,
   SKIP_REASONS,
   poolCandidates,
-  buildAutoRecipe
+  buildAutoRecipe,
+  buildCoverageRecipes
 };

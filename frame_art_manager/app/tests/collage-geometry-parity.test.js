@@ -126,6 +126,9 @@ test('client depth styles, textures and solo aspects match the server', () => {
   assert.deepStrictEqual(client.DEPTH_STYLES, server.DEPTH_STYLES);
   assert.deepStrictEqual(client.TEXTURES, server.TEXTURES);
   assert.deepStrictEqual(client.SOLO_WINDOW_ASPECT, server.SOLO_WINDOW_ASPECT);
+  // The default template pool a group form offers must be the one a coverage
+  // build actually uses (collage_auto.js).
+  assert.deepStrictEqual(client.MULTI_TEMPLATES, require('../collage_auto').MULTI_TEMPLATES);
 });
 
 test('soloOrientation agrees across aspect ratios including square', () => {

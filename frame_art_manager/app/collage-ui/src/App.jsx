@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { editIdFromQuery, fetchLibrary, fetchTags, idsFromQuery } from './api.js';
+import { editIdFromQuery, fetchLibrary, fetchTags, idsFromQuery, viewFromQuery } from './api.js';
 import { TEMPLATES, defaultMatte, matteForUi } from './geometry.js';
 import { usePreview } from './usePreview.js';
 import TemplatePicker from './components/TemplatePicker.jsx';
@@ -8,6 +8,7 @@ import MattePanel from './components/MattePanel.jsx';
 import PreviewPane from './components/PreviewPane.jsx';
 import DicePanel from './components/DicePanel.jsx';
 import SavePanel from './components/SavePanel.jsx';
+import GroupsPanel from './components/GroupsPanel.jsx';
 
 const MIN_IMAGES = 2;
 const MAX_IMAGES = 4;
@@ -33,8 +34,24 @@ function describeEditProblem(editId, library) {
   return null;
 }
 
+/** Tab across the top: the builder, or the standing collage groups. */
+function ViewTab({ active, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-3 py-1 text-sm transition-colors cursor-pointer ${
+        active ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-300'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function App() {
   const [ids] = useState(idsFromQuery);
+  const [view, setView] = useState(viewFromQuery);
   const [editId, setEditId] = useState(editIdFromQuery);
   const [library, setLibrary] = useState(null);
   const [allTags, setAllTags] = useState([]);
@@ -136,11 +153,29 @@ export default function App() {
 
   const editEntryProblem = describeEditProblem(editId, library);
 
+  // Keep the tab in the URL so a reload (or a bookmark) lands in the same view.
+  const showView = (next) => {
+    setView(next);
+    const params = new URLSearchParams(window.location.search);
+    if (next === 'groups') params.set('view', 'groups');
+    else params.delete('view');
+    const query = params.toString();
+    window.history.replaceState(null, '', query ? `?${query}` : window.location.pathname);
+  };
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <header className="border-b border-neutral-800 px-6 py-4 flex items-baseline gap-4">
         <h1 className="text-xl font-semibold">Collage Builder</h1>
-        {editId && recipe && (
+        <nav className="flex gap-1">
+          <ViewTab active={view === 'builder'} onClick={() => showView('builder')}>
+            Builder
+          </ViewTab>
+          <ViewTab active={view === 'groups'} onClick={() => showView('groups')}>
+            Groups
+          </ViewTab>
+        </nav>
+        {view === 'builder' && editId && recipe && (
           <span className="text-sm text-neutral-500 truncate">
             editing <span className="font-mono text-neutral-400">{editId}</span>
           </span>
@@ -153,9 +188,13 @@ export default function App() {
       <main className="p-6">
         {loadError && <p className="text-red-400">Could not load the library: {loadError}</p>}
 
-        {editEntryProblem && <p className="text-amber-400">{editEntryProblem}</p>}
+        {view === 'groups' && <GroupsPanel allTags={allTags} />}
 
-        {library && !editId && !recipe && (
+        {view === 'builder' && editEntryProblem && (
+          <p className="text-amber-400">{editEntryProblem}</p>
+        )}
+
+        {view === 'builder' && library && !editId && !recipe && (
           <div className="space-y-2">
             <p className="text-amber-400">
               Select {MIN_IMAGES}–{MAX_IMAGES} images in the gallery, then choose “Create
@@ -167,9 +206,11 @@ export default function App() {
           </div>
         )}
 
-        {!library && !loadError && <p className="text-neutral-500">Loading library…</p>}
+        {view === 'builder' && !library && !loadError && (
+          <p className="text-neutral-500">Loading library…</p>
+        )}
 
-        {library && recipe && (
+        {view === 'builder' && library && recipe && (
           <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
             <div className="space-y-6 min-w-0">
               <PreviewPane

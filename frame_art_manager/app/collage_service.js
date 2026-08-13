@@ -896,6 +896,8 @@ module.exports = {
   TEXTURES,
   SOLO_WINDOW_ASPECT,
   soloOrientation,
+  getTemplate,
+  resolveMatte,
   normalizeRecipe,
   computeLayout,
   computeCoverCrop,

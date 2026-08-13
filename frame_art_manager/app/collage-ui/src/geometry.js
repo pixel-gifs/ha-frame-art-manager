@@ -23,6 +23,11 @@ export const TEMPLATES = {
   solo: { label: 'Solo', slotCount: 1 }
 };
 
+// The multi-photo templates: everything a coverage build reaches for by
+// default. Solo is opt-in — it is asked for by name, or routed to by the
+// landscapeSolo split. Mirrors MULTI_TEMPLATES in collage_auto.js.
+export const MULTI_TEMPLATES = Object.keys(TEMPLATES).filter((key) => key !== 'solo');
+
 // Bevel depth treatments and matte textures (render params live server-side;
 // these lists drive the pickers and must match the server's).
 export const DEPTH_STYLES = ['miter', 'recess', 'double'];
