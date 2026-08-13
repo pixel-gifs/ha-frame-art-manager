@@ -34,6 +34,8 @@ const testSuites = [
   { name: 'Collage Coverage Tests', file: 'collage-coverage.test.js' },
   { name: 'Collage Route Tests', file: 'collage-routes.test.js' },
   { name: 'Collage Group Tests', file: 'collage-groups.test.js' },
+  { name: 'Collage Fluid Planner Tests', file: 'collage-fluid.test.js' },
+  { name: 'Collage Rotation Tests', file: 'collage-rotation.test.js' },
   { name: 'Collage UI Route Tests', file: 'collage-ui-route.test.js' },
   { name: 'Collage Geometry Parity Tests', file: 'collage-geometry-parity.test.js' }
 ];

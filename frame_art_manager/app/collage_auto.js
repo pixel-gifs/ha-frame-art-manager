@@ -359,6 +359,58 @@ function seatCandidate(templateKey, seed, companions, unusedCount = companions.l
 }
 
 /**
+ * The inputs every group planner shares: a non-empty tag pool and a validated
+ * template pool (all the multi-photo templates when the group names none).
+ */
+function resolveTemplatePool(sourceTags, templatePool) {
+  if (!Array.isArray(sourceTags) || sourceTags.filter(t => String(t).trim()).length === 0) {
+    throw badRequest('sourceTags must be a non-empty array of tags');
+  }
+  const pool = Array.isArray(templatePool) && templatePool.length > 0
+    ? templatePool
+    : MULTI_TEMPLATES;
+  pool.forEach(assertTemplate);
+  return pool;
+}
+
+/**
+ * Try to build a collage around one seed, template by template in random
+ * order.
+ *
+ * @returns {{ seated: {key, picks}|null, skip: {imageId, reason}|null }} — a
+ *          seed that lands nowhere comes back as a skip, told apart by whether
+ *          any window could have carried it at all.
+ */
+function seatSeed(keys, seed, companions, unusedCount, rng) {
+  let fitsSomewhere = false;
+
+  for (const key of shuffle(keys, rng)) {
+    const attempt = seatCandidate(key, seed, companions, unusedCount);
+    fitsSomewhere = fitsSomewhere || attempt.fits;
+    if (attempt.picks) {
+      return { seated: { key, picks: attempt.picks }, skip: null };
+    }
+  }
+
+  return {
+    seated: null,
+    skip: {
+      imageId: seed.imageId,
+      reason: fitsSomewhere ? SKIP_REASONS.noFillableTemplate : SKIP_REASONS.noFittingWindow
+    }
+  };
+}
+
+/** A seated template as a renderable recipe. Focal points start centred. */
+function recipeFor(seated, matte) {
+  return normalizeRecipe({
+    template: seated.key,
+    matte,
+    slots: seated.picks.map(({ imageId }) => ({ imageId, focal: { x: 0.5, y: 0.5 } }))
+  });
+}
+
+/**
  * Plan a group's coverage build: enough collages that every source image the
  * templates can carry appears at least once.
  *
@@ -387,14 +439,7 @@ function buildCoverageRecipes({
   landscapeSolo = false,
   rng = Math.random
 } = {}) {
-  if (!Array.isArray(sourceTags) || sourceTags.filter(t => String(t).trim()).length === 0) {
-    throw badRequest('sourceTags must be a non-empty array of tags');
-  }
-
-  const pool = Array.isArray(templatePool) && templatePool.length > 0
-    ? templatePool
-    : MULTI_TEMPLATES;
-  pool.forEach(assertTemplate);
+  const pool = resolveTemplatePool(sourceTags, templatePool);
 
   const { candidates, skipped } = poolCandidates(images, sourceTags);
   const shuffled = shuffle(candidates, rng);
@@ -429,22 +474,9 @@ function buildCoverageRecipes({
       const seed = unused.shift();
       const companions = [...unused, ...featured];
 
-      let seated = null;
-      let fitsSomewhere = false;
-      for (const key of shuffle(route.keys, rng)) {
-        const attempt = seatCandidate(key, seed, companions, unused.length);
-        fitsSomewhere = fitsSomewhere || attempt.fits;
-        if (attempt.picks) {
-          seated = { key, picks: attempt.picks };
-          break;
-        }
-      }
-
+      const { seated, skip } = seatSeed(route.keys, seed, companions, unused.length, rng);
       if (!seated) {
-        skipped.push({
-          imageId: seed.imageId,
-          reason: fitsSomewhere ? SKIP_REASONS.noFillableTemplate : SKIP_REASONS.noFittingWindow
-        });
+        skipped.push(skip);
         continue;
       }
 
@@ -456,15 +488,134 @@ function buildCoverageRecipes({
         if (!featured.includes(pick)) featured.push(pick);
       }
 
-      recipes.push(normalizeRecipe({
-        template: seated.key,
-        matte,
-        slots: seated.picks.map(({ imageId }) => ({ imageId, focal: { x: 0.5, y: 0.5 } }))
-      }));
+      recipes.push(recipeFor(seated, matte));
     }
   }
 
   return { recipes, skipped: skipped.sort((a, b) => a.imageId.localeCompare(b.imageId)) };
+}
+
+/**
+ * Plan one step of a group's fluid rotation (#7 decisions 8, 9; #12).
+ *
+ * Where a coverage build plans a whole batch at once, a fluid group holds a
+ * single collage that is replaced over and over. Each step seats a photo the
+ * current cycle has not shown yet and fills the rest of the windows from the
+ * still-unused pool, padding with the least recently used photos when the pool
+ * runs short. The cycle resets — every photo unused again — only once the pool
+ * empties, so a newly tagged photo joins the *current* cycle rather than
+ * waiting for the next one.
+ *
+ * Pure: the caller owns the state file and the render.
+ *
+ * @param {object} opts
+ * @param {object} opts.images         metadata.json images map
+ * @param {string[]} opts.sourceTags   tags to draw photos from (required)
+ * @param {object} [opts.matte]        the group's matte spec, used verbatim
+ * @param {string[]} [opts.templatePool] templates this step may use
+ * @param {boolean} [opts.landscapeSolo] route landscapes to matted 1-ups
+ * @param {string[]} [opts.used]       imageIds already shown this cycle
+ * @param {string[]} [opts.recent]     imageIds most-recently-shown first — the
+ *                                     LRU order padding draws from
+ * @param {function} [opts.rng]        0..1 random source (injectable)
+ * @returns {{ recipe: object, skipped: object[], used: string[],
+ *             recent: string[], cycleReset: boolean,
+ *             cycle: { used: number, total: number } }}
+ *          the next collage plus the cycle state that follows from it.
+ * @throws  a 400 carrying `details.skipped` when the pool can render nothing.
+ */
+function planFluidStep({
+  images,
+  sourceTags,
+  matte = {},
+  templatePool,
+  landscapeSolo = false,
+  used = [],
+  recent = [],
+  rng = Math.random
+} = {}) {
+  const pool = resolveTemplatePool(sourceTags, templatePool);
+
+  const { candidates, skipped } = poolCandidates(images, sourceTags);
+  if (candidates.length === 0) {
+    const error = badRequest(
+      `No photos with usable dimensions are tagged [${sourceTags.join(', ')}]`
+    );
+    error.details = { skipped };
+    throw error;
+  }
+
+  // Photos that have left the tag pool since the last step leave the cycle
+  // with it — the cycle is about the pool as it stands now.
+  const inPool = new Set(candidates.map(({ imageId }) => imageId));
+  const shown = new Set(used.filter(imageId => inPool.has(imageId)));
+  const lru = recent.filter(imageId => inPool.has(imageId));
+
+  const cycleReset = candidates.every(({ imageId }) => shown.has(imageId));
+  if (cycleReset) shown.clear();
+
+  const unusedOrder = shuffle(candidates.filter(({ imageId }) => !shown.has(imageId)), rng);
+  // Padding order: least recently used first, and a photo the log has never
+  // mentioned is as old as it gets (rank past the end of the LRU list).
+  const rankOf = imageId => {
+    const index = lru.indexOf(imageId);
+    return index === -1 ? lru.length : index;
+  };
+  const padOrder = candidates
+    .filter(({ imageId }) => shown.has(imageId))
+    .sort((a, b) => rankOf(b.imageId) - rankOf(a.imageId) || a.imageId.localeCompare(b.imageId));
+
+  // The landscapeSolo split decides per seed rather than per batch: a
+  // landscape gets a 1-up, a portrait gets the multi-photo templates (and
+  // portraits keep solo only when the group's pool asks for it by name).
+  const multiKeys = pool.filter(key => key !== 'solo');
+  const routeFor = seed => {
+    if (!landscapeSolo) return { keys: pool, allow: () => true };
+    if (orientationOf(seed.aspect) === 'landscape') {
+      return { keys: ['solo'], allow: c => orientationOf(c.aspect) === 'landscape' };
+    }
+    return {
+      keys: pool.includes('solo') ? pool : multiKeys,
+      allow: c => orientationOf(c.aspect) !== 'landscape'
+    };
+  };
+
+  const stepSkips = [];
+  let seated = null;
+
+  for (let index = 0; index < unusedOrder.length && !seated; index++) {
+    const seed = unusedOrder[index];
+    const { keys, allow } = routeFor(seed);
+    const unusedCompanions = unusedOrder.filter((_, other) => other !== index).filter(allow);
+    const companions = [...unusedCompanions, ...padOrder.filter(allow)];
+
+    const attempt = seatSeed(keys, seed, companions, unusedCompanions.length, rng);
+    seated = attempt.seated;
+    if (attempt.skip) stepSkips.push(attempt.skip);
+  }
+
+  const report = [...skipped, ...stepSkips].sort((a, b) => a.imageId.localeCompare(b.imageId));
+
+  if (!seated) {
+    const error = badRequest(
+      `Not enough aspect-compatible images tagged [${sourceTags.join(', ')}] ` +
+      'to render the next collage in the rotation'
+    );
+    error.details = { skipped: report };
+    throw error;
+  }
+
+  const pickedIds = seated.picks.map(({ imageId }) => imageId);
+  pickedIds.forEach(imageId => shown.add(imageId));
+
+  return {
+    recipe: recipeFor(seated, matte),
+    skipped: report,
+    used: [...shown],
+    recent: [...pickedIds, ...lru.filter(imageId => !pickedIds.includes(imageId))],
+    cycleReset,
+    cycle: { used: shown.size, total: candidates.length }
+  };
 }
 
 module.exports = {
@@ -473,5 +624,6 @@ module.exports = {
   SKIP_REASONS,
   poolCandidates,
   buildAutoRecipe,
-  buildCoverageRecipes
+  buildCoverageRecipes,
+  planFluidStep
 };

@@ -130,3 +130,17 @@ export async function buildGroup(name) {
   const res = await postJson(`${groupUrl(name)}/build`, {});
   return parseJsonOrThrow(res, 'Failed to build the group');
 }
+
+// --- Fluid rotation (#12, #13) ---
+
+/** Advance a fluid group: renders the next collage, then drops the old one. */
+export async function advanceGroup(name) {
+  const res = await postJson(`${groupUrl(name)}/next`, {});
+  return parseJsonOrThrow(res, 'Failed to advance the rotation');
+}
+
+/** Re-render a logged rotation recipe as a permanent, ungrouped collage. */
+export async function promoteLogEntry(group, entry, tags) {
+  const res = await postJson(`${API_BASE}/collage/promote`, { group, entry, tags });
+  return parseJsonOrThrow(res, 'Failed to promote the collage');
+}

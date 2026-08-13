@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  advanceGroup,
   buildGroup,
   createGroup,
   deleteGroup,
   fetchGroups,
+  fetchPreviewUrl,
+  promoteLogEntry,
   updateGroup,
 } from '../api.js';
 import { MULTI_TEMPLATES, TEMPLATES, defaultMatte, matteForUi } from '../geometry.js';
@@ -11,7 +14,7 @@ import MattePanel from './MattePanel.jsx';
 
 const MODES = [
   { key: 'coverage', label: 'Coverage', hint: 'one run covers every photo in the tags' },
-  { key: 'fluid', label: 'Fluid', hint: 'rotates a few at a time (not built yet)' },
+  { key: 'fluid', label: 'Fluid', hint: 'one collage at a time, replaced on every step' },
 ];
 
 const SKIP_REASON_LABELS = {
@@ -20,6 +23,9 @@ const SKIP_REASON_LABELS = {
   'no-fillable-template': 'nothing compatible to pair it with',
   'landscape-solo': 'set aside by the landscape-solo split',
 };
+
+// Rotation log entries revealed per click — each one renders a preview.
+const LOG_PAGE = 6;
 
 const INPUT =
   'w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-600 focus:border-sky-400 focus:outline-none';
@@ -127,7 +133,126 @@ function LastRun({ run }) {
   );
 }
 
-function GroupCard({ group, busy, onRun, onEdit, onDelete }) {
+/**
+ * One logged rotation step. The preview is rendered on demand — the collage
+ * itself is usually long deleted, so the recipe is all there is to show.
+ */
+function LogEntry({ entry, busy, onPromote }) {
+  const [url, setUrl] = useState(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    let objectUrl = null;
+    fetchPreviewUrl(entry.recipe)
+      .then((next) => {
+        if (!live) return URL.revokeObjectURL(next);
+        objectUrl = next;
+        setUrl(next);
+      })
+      .catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [entry.recipe]);
+
+  return (
+    <li className="space-y-1">
+      <div className="aspect-video overflow-hidden rounded-lg border border-neutral-800 bg-neutral-950">
+        {url && <img src={url} alt="" className="h-full w-full object-contain" />}
+        {!url && (
+          <div className="flex h-full items-center justify-center text-[10px] text-neutral-600">
+            {failed ? 'preview unavailable' : 'rendering…'}
+          </div>
+        )}
+      </div>
+      <p className="text-[10px] text-neutral-500">
+        #{entry.id} · {new Date(entry.at).toLocaleString()} ·{' '}
+        {TEMPLATES[entry.template]?.label || entry.template}
+      </p>
+      <button
+        type="button"
+        onClick={onPromote}
+        disabled={busy}
+        className="w-full rounded-lg border border-neutral-600 px-2 py-1 text-[11px] text-neutral-300 hover:border-emerald-400 hover:text-emerald-300 disabled:opacity-40 cursor-pointer"
+      >
+        Promote
+      </button>
+    </li>
+  );
+}
+
+/**
+ * Where a fluid group stands: how much of the pool this cycle has shown, and
+ * the recent steps, any of which can be promoted back into a permanent
+ * collage before the rotation forgets it.
+ */
+function Rotation({ group, busy, onPromote }) {
+  const [showLog, setShowLog] = useState(false);
+  // Each visible entry costs a preview render, so the log opens on a page of
+  // the most recent steps rather than firing 50 renders at once.
+  const [shown, setShown] = useState(LOG_PAGE);
+  const { cycle, cycles, current, log } = group.fluid;
+  const percent = cycle.total > 0 ? Math.round((cycle.used / cycle.total) * 100) : 0;
+
+  return (
+    <div className="space-y-2 text-xs text-neutral-400">
+      <p>
+        Cycle: <span className="text-neutral-200">{cycle.used} of {cycle.total}</span> photos shown
+        {cycles > 0 && <> · {cycles} completed</>}
+        {current ? (
+          <>
+            {' '}· now showing <span className="font-mono text-neutral-500">{current}</span>
+          </>
+        ) : (
+          <> · nothing in rotation yet</>
+        )}
+      </p>
+      <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-800">
+        <div className="h-full bg-sky-500" style={{ width: `${percent}%` }} />
+      </div>
+
+      {log.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowLog((open) => !open)}
+            className="text-neutral-400 hover:text-neutral-200 cursor-pointer"
+          >
+            Recent steps ({log.length}) {showLog ? '▾' : '▸'}
+          </button>
+          {showLog && (
+            <>
+              <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {log.slice(0, shown).map((entry) => (
+                  <LogEntry
+                    key={entry.id}
+                    entry={entry}
+                    busy={busy}
+                    onPromote={() => onPromote(entry)}
+                  />
+                ))}
+              </ul>
+              {log.length > shown && (
+                <button
+                  type="button"
+                  onClick={() => setShown((count) => count + LOG_PAGE)}
+                  className="text-neutral-400 hover:text-neutral-200 cursor-pointer"
+                >
+                  Show {Math.min(LOG_PAGE, log.length - shown)} older
+                </button>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function GroupCard({ group, busy, onRun, onEdit, onDelete, onPromote }) {
+  const fluid = group.mode === 'fluid';
   return (
     <li className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-4 space-y-3">
       <div className="flex items-baseline gap-3 flex-wrap">
@@ -147,17 +272,21 @@ function GroupCard({ group, busy, onRun, onEdit, onDelete }) {
         {group.matteSpec.swatch} matte, {group.matteSpec.borderWidth}px border
       </p>
 
-      <LastRun run={group.lastRun} />
+      {fluid && group.fluid ? (
+        <Rotation group={group} busy={busy} onPromote={onPromote} />
+      ) : (
+        <LastRun run={group.lastRun} />
+      )}
 
       <div className="flex gap-2">
         <button
           type="button"
           onClick={onRun}
-          disabled={busy || group.mode !== 'coverage'}
-          title={group.mode === 'coverage' ? undefined : 'Only coverage groups can be built'}
+          disabled={busy}
+          title={fluid ? 'Render the next collage and drop the current one' : undefined}
           className="rounded-lg bg-sky-500 px-4 py-1.5 text-xs font-medium text-white hover:bg-sky-400 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         >
-          {busy ? 'Building…' : 'Run now'}
+          {busy ? (fluid ? 'Advancing…' : 'Building…') : fluid ? 'Advance now' : 'Run now'}
         </button>
         <button
           type="button"
@@ -390,19 +519,55 @@ export default function GroupsPanel({ allTags }) {
     setBusyGroup(group.name);
     setNotice(null);
     try {
-      const summary = await buildGroup(group.name);
-      setNotice({
-        tone: 'ok',
-        text:
-          `${group.name}: built ${summary.created.length} collages` +
-          (summary.removed.length ? `, replaced ${summary.removed.length}` : '') +
-          (summary.skipped.length ? `, skipped ${summary.skipped.length}` : ''),
-      });
+      if (group.mode === 'fluid') {
+        const step = await advanceGroup(group.name);
+        setNotice({
+          tone: 'ok',
+          text:
+            `${group.name}: now showing ${step.filename}` +
+            ` (${step.cycle.used} of ${step.cycle.total} this cycle)` +
+            (step.removed.length ? `, replaced ${step.removed.join(', ')}` : ''),
+        });
+      } else {
+        const summary = await buildGroup(group.name);
+        setNotice({
+          tone: 'ok',
+          text:
+            `${group.name}: built ${summary.created.length} collages` +
+            (summary.removed.length ? `, replaced ${summary.removed.length}` : '') +
+            (summary.skipped.length ? `, skipped ${summary.skipped.length}` : ''),
+        });
+      }
       await reload();
     } catch (err) {
-      // A refused build still reports why every photo missed out — the group
+      // A refused run still reports why every photo missed out — the group
       // card has no run to show it, so surface it here.
       setNotice({ tone: 'error', text: `${group.name}: ${err.message}`, skipped: err.skipped });
+    } finally {
+      setBusyGroup(null);
+    }
+  };
+
+  /**
+   * Rescue a logged step as a permanent collage. Its tags are the user's — the
+   * group's output tag is what the TV rotates on, so inheriting it would put a
+   * second image in the rotation.
+   */
+  const promote = async (group, entry) => {
+    const answer = window.prompt(
+      `Save step #${entry.id} as a permanent collage.\nTags (comma separated, optional):`,
+      ''
+    );
+    if (answer === null) return;
+
+    setBusyGroup(group.name);
+    setNotice(null);
+    try {
+      const saved = await promoteLogEntry(group.name, entry.id, answer);
+      setNotice({ tone: 'ok', text: `Promoted step #${entry.id} — saved as ${saved.filename}.` });
+      await reload();
+    } catch (err) {
+      setNotice({ tone: 'error', text: `${group.name}: ${err.message}` });
     } finally {
       setBusyGroup(null);
     }
@@ -463,6 +628,7 @@ export default function GroupsPanel({ allTags }) {
               onRun={() => run(group)}
               onEdit={() => startEdit(group)}
               onDelete={() => remove(group)}
+              onPromote={(entry) => promote(group, entry)}
             />
           ))}
           {sorted.length === 0 && (

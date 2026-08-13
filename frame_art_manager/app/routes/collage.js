@@ -16,6 +16,8 @@ const {
   saveNewCollage
 } = require('../collage_library');
 const groupsRouter = require('./collage_groups');
+const { normalizeGroupName } = require('../collage_groups');
+const { promoteLoggedRecipe } = require('../collage_fluid');
 
 function parseRecipe(body) {
   if (!body || typeof body.recipe !== 'object' || body.recipe === null) {
@@ -108,6 +110,24 @@ router.post('/suggest', async (req, res) => {
     res.json({ recipe, skipped });
   } catch (error) {
     sendError(res, error, 'Failed to suggest collage');
+  }
+});
+
+// POST /api/collage/promote — rescue a collage the rotation has already
+// deleted (or is about to): re-render a logged recipe as a permanent library
+// image. It carries the caller's tags and no group stamp, so no later
+// rotation step or coverage replace can touch it.
+router.post('/promote', async (req, res) => {
+  try {
+    const { group, entry, tags } = req.body || {};
+    const result = await promoteLoggedRecipe(req.frameArtPath, {
+      group: normalizeGroupName(group),
+      entry,
+      tags: normalizeTags(tags)
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendError(res, error, 'Failed to promote collage');
   }
 });
 
