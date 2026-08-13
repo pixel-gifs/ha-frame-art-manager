@@ -81,26 +81,44 @@ const RECESS_WIDTH_FACTOR = 1.7;
 const DOUBLE_REVEAL_FACTOR = 2.5;
 const DOUBLE_INNER_FACTOR = 0.75;
 
-// The global light model, baked from Matt's tuning-lab session (2026-08-12):
-// light from the upper-right (shadow falls down-left at 135°), a near-crisp
-// bevel, per-side face/rim shade() factors on the swatch's bevel colour
-// (top darkest → left brightest), solid lit rims, and two subtle tight
-// shadow layers. Every key is per-recipe tunable via matte.shadowParams;
+// The global light model, baked from Matt's tuning-lab sessions (2026-08-12,
+// refined 2026-08-13): light from the upper-right (shadow falls down-left at
+// 135°), a near-crisp bevel, per-side face/rim shade() factors on the
+// swatch's bevel colour (top darkest → left brightest), a soft gradient
+// darkening each face toward the cut, thin crisp lit rims, a fine low-
+// contrast paper grain, and two subtle tight shadow layers.
+// Every key is per-recipe tunable via matte.shadowParams;
 // px values are at the 4K reference canvas, blurs are SVG stdDeviations.
 // Kept in lockstep with collage-ui/src/geometry.js (parity-tested).
+// The *On keys are layer switches, carried as 0/1 numbers so they clamp,
+// resolve and parity-test exactly like every other tunable (>= 0.5 is on).
 const LOOK_DEFAULTS = {
+  texturePitch: 0.5,
   bevelFeather: 0.25,
+  facesOn: 1,
   faceTop: -0.23, faceRight: -0.155, faceBottom: -0.045, faceLeft: 0.45,
-  rimWidth: 2.2, rimFeather: 0.75, rimOpacity: 1,
+  faceGradOn: 1, faceGradStrength: 0.22, faceGradLength: 0.67,
+  faceGradFeather: 1, faceGradFlip: 1,
+  rimsOn: 1, rimWidth: 1.2, rimFeather: 0, rimOpacity: 1,
   rimTop: -0.16, rimRight: -0.1, rimBottom: -0.045, rimLeft: 0.42,
   shadowAngle: 135, shadowDistance: 10,
-  umbraOpacity: 0.12, umbraBlur: 2, umbraSpread: 0,
-  penumbraOpacity: 0.08, penumbraBlur: 6, penumbraSpread: 7
+  umbraOn: 1, umbraOpacity: 0.12, umbraBlur: 2, umbraSpread: 0,
+  penumbraOn: 1, penumbraOpacity: 0.08, penumbraBlur: 6, penumbraSpread: 7
 };
 // The penumbra drifts further along the shadow direction than the umbra.
 const PENUMBRA_DRIFT = 1.6;
 
 const TEXTURE_TILE_SIZE = 512;
+
+// Face shadow gradient vectors in objectBoundingBox units, [x1, y1, x2, y2],
+// running outer edge → inner edge for each bevel face. A face's bbox is its
+// own band strip, so "0" is whichever side of that strip faces the matte.
+const FACE_GRADIENT_AXES = {
+  top: [0, 0, 0, 1],
+  bottom: [0, 1, 0, 0],
+  left: [0, 0, 1, 0],
+  right: [1, 0, 0, 0]
+};
 
 // Curated swatch catalogue: shadow/bevel params are px at 4K reference
 // scale, opacities 0..1. textureOpacity is the alpha the texture tile is
@@ -116,16 +134,24 @@ const BORDER_CHIPS = SWATCH_CATALOGUE.borderChips;
 // the client's copy in collage-ui/src/geometry.js (parity-tested).
 const PX_MAX = 400;
 const SHADOW_PARAM_BOUNDS = {
-  textureOpacity: [0, 1],
+  textureOpacity: [0, 1], texturePitch: [0.25, 4],
   bevelWidth: [0, PX_MAX],
   bevelFeather: [0, 20],
+  facesOn: [0, 1],
   faceTop: [-1, 1], faceRight: [-1, 1], faceBottom: [-1, 1], faceLeft: [-1, 1],
-  rimWidth: [0, 12], rimFeather: [0, 8], rimOpacity: [0, 1],
+  faceGradOn: [0, 1], faceGradStrength: [0, 1], faceGradLength: [0.05, 1],
+  faceGradFeather: [0, 1], faceGradFlip: [0, 1],
+  rimsOn: [0, 1], rimWidth: [0, 12], rimFeather: [0, 8], rimOpacity: [0, 1],
   rimTop: [-1, 1], rimRight: [-1, 1], rimBottom: [-1, 1], rimLeft: [-1, 1],
   shadowAngle: [0, 360], shadowDistance: [0, 80],
-  umbraOpacity: [0, 1], umbraBlur: [0, 120], umbraSpread: [0, 80],
-  penumbraOpacity: [0, 1], penumbraBlur: [0, 200], penumbraSpread: [0, 100]
+  umbraOn: [0, 1], umbraOpacity: [0, 1], umbraBlur: [0, 120], umbraSpread: [0, 80],
+  penumbraOn: [0, 1], penumbraOpacity: [0, 1], penumbraBlur: [0, 200], penumbraSpread: [0, 100]
 };
+
+/** Layer switches ride as 0/1 numbers; anything from 0.5 up counts as on. */
+function isOn(value) {
+  return value >= 0.5;
+}
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -485,21 +511,68 @@ function depthBands(spec, depthStyle, scale, win) {
   return [{ kind: 'bevel', width: bevel }];
 }
 
+/** Whether the face shadow gradient contributes anything at these params. */
+function faceGradientOn(spec) {
+  return isOn(spec.faceGradOn) && spec.faceGradStrength > 0;
+}
+
+/**
+ * The face shadow gradient's four <linearGradient> defs — one per side,
+ * each running perpendicular to that face. objectBoundingBox units (the
+ * default) mean a single def per side serves every window and both bands of
+ * the double treatment, whatever their widths: each trapezoid's bbox is
+ * exactly its own band strip. Vectors run outer edge → inner edge, so
+ * unflipped the dark end sits at the matte side; flipped, at the cut.
+ * Stops are a solid plateau, a ramp out to `length`, then nothing —
+ * feather splits the length between the two, so feather 1 is a plain linear
+ * falloff and feather 0 a hard-edged band.
+ */
+function faceGradientDefs(spec) {
+  if (!faceGradientOn(spec)) {
+    return [];
+  }
+  const alpha = clamp(spec.faceGradStrength, 0, 1);
+  const length = clamp(spec.faceGradLength, 0.05, 1);
+  const plateau = length * (1 - clamp(spec.faceGradFeather, 0, 1));
+  const stop = (offset, opacity) =>
+    `<stop offset="${offset}" stop-color="#000000" stop-opacity="${opacity}"/>`;
+  const stops =
+    stop(0, alpha) +
+    (plateau > 0 ? stop(plateau, alpha) : '') +
+    stop(length, 0) +
+    (length < 1 ? stop(1, 0) : '');
+  return Object.entries(FACE_GRADIENT_AXES).map(([side, axis]) => {
+    const [x1, y1, x2, y2] = isOn(spec.faceGradFlip)
+      ? [axis[2], axis[3], axis[0], axis[1]]
+      : axis;
+    return (
+      `<linearGradient id="fg${side}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">` +
+      `${stops}</linearGradient>`
+    );
+  });
+}
+
 /**
  * Four mitered bevel faces between two concentric rects, as trapezoids.
  * Uniform insets make the seams meet at 45°. Top face sits in shadow,
  * bottom catches light (top-lit shadowbox), left/right at half strength.
+ * Each face optionally carries the shadow gradient as a second polygon on
+ * the same points, drawn before the next face so the mitered corners still
+ * overlap in the original order.
  */
 function miterFaces(outer, inner, spec) {
   const oL = outer.x, oT = outer.y, oR = outer.x + outer.w, oB = outer.y + outer.h;
   const iL = inner.x, iT = inner.y, iR = inner.x + inner.w, iB = inner.y + inner.h;
   const c = spec.bevelColor;
-  const face = (points, fill) => `<polygon points="${points}" fill="${fill}"/>`;
+  const grad = faceGradientOn(spec);
+  const face = (points, fill, side) =>
+    `<polygon points="${points}" fill="${fill}"/>` +
+    (grad ? `<polygon points="${points}" fill="url(#fg${side})"/>` : '');
   return (
-    face(`${oL},${oT} ${oR},${oT} ${iR},${iT} ${iL},${iT}`, shade(c, spec.faceTop)) +
-    face(`${oL},${oT} ${iL},${iT} ${iL},${iB} ${oL},${oB}`, shade(c, spec.faceLeft)) +
-    face(`${oL},${oB} ${iL},${iB} ${iR},${iB} ${oR},${oB}`, shade(c, spec.faceBottom)) +
-    face(`${oR},${oT} ${oR},${oB} ${iR},${iB} ${iR},${iT}`, shade(c, spec.faceRight))
+    face(`${oL},${oT} ${oR},${oT} ${iR},${iT} ${iL},${iT}`, shade(c, spec.faceTop), 'top') +
+    face(`${oL},${oT} ${iL},${iT} ${iL},${iB} ${oL},${oB}`, shade(c, spec.faceLeft), 'left') +
+    face(`${oL},${oB} ${iL},${iB} ${iR},${iB} ${oR},${oB}`, shade(c, spec.faceBottom), 'bottom') +
+    face(`${oR},${oT} ${oR},${oB} ${iR},${iB} ${iR},${iT}`, shade(c, spec.faceRight), 'right')
   );
 }
 
@@ -509,7 +582,7 @@ function miterFaces(outer, inner, spec) {
  * light fall on the rim where the matte surface meets the cut.
  */
 function cutEdges(rect, spec, scale, opacityFactor) {
-  if (spec.rimWidth <= 0 || spec.rimOpacity <= 0) {
+  if (!isOn(spec.rimsOn) || spec.rimWidth <= 0 || spec.rimOpacity <= 0) {
     return '';
   }
   const w = Math.max(1, Math.round(spec.rimWidth * scale));
@@ -560,7 +633,8 @@ function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) 
     `<filter id="bf" x="-40%" y="-40%" width="180%" height="180%">` +
     `<feGaussianBlur stdDeviation="${Math.max(0.05, spec.bevelFeather * scale)}"/></filter>`,
     `<filter id="cf" x="-40%" y="-40%" width="180%" height="180%">` +
-    `<feGaussianBlur stdDeviation="${Math.max(0.05, spec.rimFeather * scale)}"/></filter>`
+    `<feGaussianBlur stdDeviation="${Math.max(0.05, spec.rimFeather * scale)}"/></filter>`,
+    ...faceGradientDefs(spec)
   ];
 
   if (depthStyle === 'recess') {
@@ -600,8 +674,8 @@ function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) 
     // Two layers — a tight umbra at the bevel edge and a wide faint
     // penumbra — each with its own spread (how far the darkness reaches in
     // before the blur falloff starts; the donut hole shrinks by spread).
-    const shadowLayer = (opacity, spread, filterId, drift) => {
-      if (opacity <= 0) return '';
+    const shadowLayer = (on, opacity, spread, filterId, drift) => {
+      if (!isOn(on) || opacity <= 0) return '';
       const maxSpread = Math.floor(Math.min(inner.w, inner.h) / 2) - 1;
       const s = Math.min(Math.round(spread * scale), Math.max(0, maxSpread));
       // inner is already an {x,y,w,h} rect — inset it directly (insetRect
@@ -618,8 +692,8 @@ function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) 
     };
     parts.push(
       `<g clip-path="url(#win${i})">` +
-      shadowLayer(spec.umbraOpacity, spec.umbraSpread, 'is', 1) +
-      shadowLayer(spec.penumbraOpacity, spec.penumbraSpread, 'ip', PENUMBRA_DRIFT) +
+      shadowLayer(spec.umbraOn, spec.umbraOpacity, spec.umbraSpread, 'is', 1) +
+      shadowLayer(spec.penumbraOn, spec.penumbraOpacity, spec.penumbraSpread, 'ip', PENUMBRA_DRIFT) +
       `</g>`
     );
 
@@ -646,7 +720,11 @@ function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) 
       const outerRect = insetRect(win, cursor);
       const innerRect = insetRect(win, cursor + band.width);
       if (band.kind === 'bevel') {
-        parts.push(`<g filter="url(#bf)">${miterFaces(outerRect, innerRect, spec)}</g>`);
+        // Faces off still consumes the band's inset — the print keeps its
+        // size and the strip reads as bare matte, as it does in the lab.
+        if (isOn(spec.facesOn)) {
+          parts.push(`<g filter="url(#bf)">${miterFaces(outerRect, innerRect, spec)}</g>`);
+        }
       } else {
         const ring =
           rectPath(outerRect.x, outerRect.y, outerRect.w, outerRect.h) +
@@ -675,7 +753,10 @@ function buildWindowEffectsSvg(width, height, windows, spec, scale, depthStyle) 
  */
 async function buildTextureTile(texture, spec, scale) {
   const tilePath = path.join(__dirname, 'assets', `texture-${texture}.png`);
-  const size = Math.max(16, Math.round(TEXTURE_TILE_SIZE * scale));
+  // Pitch is the tile's render-size multiplier: above 1 the grain grows and
+  // spreads out, below 1 it tightens. Independent of strength.
+  const pitch = clamp(spec.texturePitch, 0.25, 4);
+  const size = Math.max(16, Math.round(TEXTURE_TILE_SIZE * scale * pitch));
   // Soft-light on a near-white matte compresses the tile's contrast to
   // sub-JPEG amplitude, so alpha can't control strength — instead expand
   // the tile's deviation around mid-grey (textureOpacity scales the boost)

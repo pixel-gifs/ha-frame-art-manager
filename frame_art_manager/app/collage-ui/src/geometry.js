@@ -46,27 +46,36 @@ export const BORDER_CHIPS = swatchCatalogue.borderChips;
 // model defaults, mirroring collage_service.js resolution (parity-tested).
 // Face/rim shades run -1..1: negative = darker than the bevel colour.
 export const SHADOW_PARAM_BOUNDS = {
-  textureOpacity: [0, 1],
+  textureOpacity: [0, 1], texturePitch: [0.25, 4],
   bevelWidth: [0, 400],
   bevelFeather: [0, 20],
+  facesOn: [0, 1],
   faceTop: [-1, 1], faceRight: [-1, 1], faceBottom: [-1, 1], faceLeft: [-1, 1],
-  rimWidth: [0, 12], rimFeather: [0, 8], rimOpacity: [0, 1],
+  faceGradOn: [0, 1], faceGradStrength: [0, 1], faceGradLength: [0.05, 1],
+  faceGradFeather: [0, 1], faceGradFlip: [0, 1],
+  rimsOn: [0, 1], rimWidth: [0, 12], rimFeather: [0, 8], rimOpacity: [0, 1],
   rimTop: [-1, 1], rimRight: [-1, 1], rimBottom: [-1, 1], rimLeft: [-1, 1],
   shadowAngle: [0, 360], shadowDistance: [0, 80],
-  umbraOpacity: [0, 1], umbraBlur: [0, 120], umbraSpread: [0, 80],
-  penumbraOpacity: [0, 1], penumbraBlur: [0, 200], penumbraSpread: [0, 100]
+  umbraOn: [0, 1], umbraOpacity: [0, 1], umbraBlur: [0, 120], umbraSpread: [0, 80],
+  penumbraOn: [0, 1], penumbraOpacity: [0, 1], penumbraBlur: [0, 200], penumbraSpread: [0, 100]
 };
 
-// Matt's baked light model (tuning-lab session 2026-08-12) — must match the
-// server's LOOK_DEFAULTS in collage_service.js.
+// Matt's baked light model (tuning-lab sessions 2026-08-12, refined
+// 2026-08-13) — must match the server's LOOK_DEFAULTS in collage_service.js.
+// The *On keys are layer switches carried as 0/1 numbers (>= 0.5 is on), so
+// they resolve and clamp like every other tunable.
 export const LOOK_DEFAULTS = {
+  texturePitch: 0.5,
   bevelFeather: 0.25,
+  facesOn: 1,
   faceTop: -0.23, faceRight: -0.155, faceBottom: -0.045, faceLeft: 0.45,
-  rimWidth: 2.2, rimFeather: 0.75, rimOpacity: 1,
+  faceGradOn: 1, faceGradStrength: 0.22, faceGradLength: 0.67,
+  faceGradFeather: 1, faceGradFlip: 1,
+  rimsOn: 1, rimWidth: 1.2, rimFeather: 0, rimOpacity: 1,
   rimTop: -0.16, rimRight: -0.1, rimBottom: -0.045, rimLeft: 0.42,
   shadowAngle: 135, shadowDistance: 10,
-  umbraOpacity: 0.12, umbraBlur: 2, umbraSpread: 0,
-  penumbraOpacity: 0.08, penumbraBlur: 6, penumbraSpread: 7
+  umbraOn: 1, umbraOpacity: 0.12, umbraBlur: 2, umbraSpread: 0,
+  penumbraOn: 1, penumbraOpacity: 0.08, penumbraBlur: 6, penumbraSpread: 7
 };
 
 /**
@@ -126,6 +135,49 @@ export function matteForUi(matte = {}) {
 
 export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function hexToRgb(hex) {
+  return {
+    r: parseInt(hex.slice(1, 3), 16),
+    g: parseInt(hex.slice(3, 5), 16),
+    b: parseInt(hex.slice(5, 7), 16)
+  };
+}
+
+/**
+ * Lighten (amount > 0, toward white) or darken (amount < 0, toward black) a
+ * #rrggbb colour — the client's copy of collage_service.js's shade(), so the
+ * Fine-tune colour wells show the face/rim colours the render will produce.
+ */
+export function shade(hex, amount) {
+  const { r, g, b } = hexToRgb(hex);
+  const mix = (c) => clamp(Math.round(amount >= 0 ? c + (255 - c) * amount : c * (1 + amount)), 0, 255);
+  return `#${[mix(r), mix(g), mix(b)].map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * The inverse: the shade amount that takes `base` closest to `target`. One
+ * amount drives all three channels, so an arbitrary colour isn't exactly
+ * reachable — averaging the per-channel solutions snaps to the nearest one
+ * the light model can express (a channel whose base is already pinned at the
+ * limit it would move toward carries no information and is skipped).
+ */
+export function shadeAmount(base, target) {
+  const b = hexToRgb(base);
+  const t = hexToRgb(target);
+  const amounts = [];
+  for (const channel of ['r', 'g', 'b']) {
+    const from = b[channel];
+    const to = t[channel];
+    if (to >= from) {
+      if (from < 255) amounts.push((to - from) / (255 - from));
+    } else if (from > 0) {
+      amounts.push(to / from - 1);
+    }
+  }
+  if (!amounts.length) return 0;
+  return clamp(amounts.reduce((sum, a) => sum + a, 0) / amounts.length, -1, 1);
 }
 
 export function toUnit(value, fallback) {

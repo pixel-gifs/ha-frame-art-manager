@@ -5,33 +5,51 @@ import {
   MATTE_SWATCHES,
   SHADOW_PARAM_BOUNDS,
   effectiveShadowParams,
+  shade,
+  shadeAmount,
 } from '../geometry.js';
 
-// Fine-tune sliders: [group, key, label, min, max, step] — slider ranges are
-// the useful subranges of SHADOW_PARAM_BOUNDS. Shade sliders run -1..1:
-// negative = darker than the bevel colour, positive = brighter.
-const TUNING_SLIDERS = [
-  ['Bevel', 'bevelWidth', 'Width (px)', 0, 40, 1],
-  ['Bevel', 'bevelFeather', 'Feather (px)', 0, 12, 0.25],
-  ['Bevel faces', 'faceTop', 'Top shade', -1, 1, 0.01],
-  ['Bevel faces', 'faceRight', 'Right shade', -1, 1, 0.01],
-  ['Bevel faces', 'faceBottom', 'Bottom shade', -1, 1, 0.01],
-  ['Bevel faces', 'faceLeft', 'Left shade', -1, 1, 0.01],
-  ['Edge rims', 'rimWidth', 'Width (px)', 0, 8, 0.2],
-  ['Edge rims', 'rimOpacity', 'Opacity', 0, 1, 0.05],
-  ['Edge rims', 'rimFeather', 'Feather (px)', 0, 6, 0.25],
-  ['Edge rims', 'rimTop', 'Top shade', -1, 1, 0.01],
-  ['Edge rims', 'rimRight', 'Right shade', -1, 1, 0.01],
-  ['Edge rims', 'rimBottom', 'Bottom shade', -1, 1, 0.01],
-  ['Edge rims', 'rimLeft', 'Left shade', -1, 1, 0.01],
-  ['Shadow fall', 'shadowAngle', 'Direction (°)', 0, 360, 5],
-  ['Shadow fall', 'shadowDistance', 'Distance (px)', 0, 40, 1],
-  ['Umbra', 'umbraOpacity', 'Opacity', 0, 1, 0.02],
-  ['Umbra', 'umbraBlur', 'Blur', 0, 60, 1],
-  ['Umbra', 'umbraSpread', 'Spread (px)', 0, 40, 1],
-  ['Penumbra', 'penumbraOpacity', 'Opacity', 0, 1, 0.02],
-  ['Penumbra', 'penumbraBlur', 'Blur', 0, 160, 2],
-  ['Penumbra', 'penumbraSpread', 'Spread (px)', 0, 60, 1],
+// Fine-tune controls, mirroring the tuning lab panel-for-panel:
+//   ['slider', group, key, label, min, max, step] — ranges are the useful
+//       subranges of SHADOW_PARAM_BOUNDS.
+//   ['toggle', group, key, label]  — layer switches; stored as 0/1.
+//   ['colour', group, key, label]  — a per-side face/rim colour well. The
+//       stored param is a shade amount against the swatch's bevel colour
+//       (-1..1, negative = darker), so the well shows the colour that
+//       renders and a pick converts back to the nearest reachable amount.
+const TUNING_CONTROLS = [
+  ['slider', 'Texture', 'textureOpacity', 'Strength', 0, 1, 0.01],
+  ['slider', 'Texture', 'texturePitch', 'Pitch', 0.25, 3, 0.05],
+  ['slider', 'Bevel', 'bevelWidth', 'Width (px)', 0, 40, 1],
+  ['slider', 'Bevel', 'bevelFeather', 'Feather (px)', 0, 12, 0.25],
+  ['toggle', 'Bevel faces', 'facesOn', 'Faces on'],
+  ['colour', 'Bevel faces', 'faceTop', 'Top face'],
+  ['colour', 'Bevel faces', 'faceRight', 'Right face'],
+  ['colour', 'Bevel faces', 'faceBottom', 'Bottom face'],
+  ['colour', 'Bevel faces', 'faceLeft', 'Left face'],
+  ['toggle', 'Face shadow gradient', 'faceGradOn', 'Gradient on'],
+  ['slider', 'Face shadow gradient', 'faceGradStrength', 'Strength', 0, 1, 0.01],
+  ['slider', 'Face shadow gradient', 'faceGradLength', 'Length', 0.05, 1, 0.01],
+  ['slider', 'Face shadow gradient', 'faceGradFeather', 'Feather', 0, 1, 0.01],
+  ['toggle', 'Face shadow gradient', 'faceGradFlip', 'Flip 180° (dark at the cut)'],
+  ['toggle', 'Edge rims', 'rimsOn', 'Rims on'],
+  ['colour', 'Edge rims', 'rimTop', 'Top rim'],
+  ['colour', 'Edge rims', 'rimRight', 'Right rim'],
+  ['colour', 'Edge rims', 'rimBottom', 'Bottom rim'],
+  ['colour', 'Edge rims', 'rimLeft', 'Left rim'],
+  ['slider', 'Edge rims', 'rimWidth', 'Width (px)', 0, 8, 0.2],
+  ['slider', 'Edge rims', 'rimOpacity', 'Opacity', 0, 1, 0.05],
+  ['slider', 'Edge rims', 'rimFeather', 'Feather (px)', 0, 6, 0.25],
+  ['slider', 'Shadow fall', 'shadowAngle', 'Direction (°)', 0, 360, 5],
+  ['slider', 'Shadow fall', 'shadowDistance', 'Distance (px)', 0, 40, 1],
+  ['toggle', 'Umbra', 'umbraOn', 'Umbra on'],
+  ['slider', 'Umbra', 'umbraOpacity', 'Opacity', 0, 1, 0.02],
+  ['slider', 'Umbra', 'umbraBlur', 'Blur', 0, 60, 1],
+  ['slider', 'Umbra', 'umbraSpread', 'Spread (px)', 0, 40, 1],
+  ['toggle', 'Penumbra', 'penumbraOn', 'Penumbra on'],
+  ['slider', 'Penumbra', 'penumbraOpacity', 'Opacity', 0, 1, 0.02],
+  ['slider', 'Penumbra', 'penumbraBlur', 'Blur', 0, 160, 2],
+  ['slider', 'Penumbra', 'penumbraSpread', 'Spread (px)', 0, 60, 1],
 ];
 
 const DEPTH_STYLE_OPTIONS = [
@@ -62,13 +80,20 @@ function Chip({ selected, onClick, children }) {
   );
 }
 
+const CONTROL_ROW = 'flex items-center gap-2 text-xs text-neutral-400';
+const CONTROL_LABEL = 'w-32 shrink-0';
+
 /**
- * Sliders over every tunable look param. Writes overrides into
- * matte.shadowParams (the recipe stores them; the server resolves anything
- * untouched from the swatch), so the debounced preview is the live readout.
+ * Every tunable look param, in the control the value actually wants: a
+ * slider for scalars, a checkbox for layer switches, a colour well for the
+ * per-side face/rim shades. Writes overrides into matte.shadowParams (the
+ * recipe stores them; the server resolves anything untouched from the
+ * swatch), so the debounced preview is the live readout.
  */
 function TuningPanel({ matte, onChange }) {
   const params = effectiveShadowParams(matte);
+  const swatch = MATTE_SWATCHES[matte.swatch] || MATTE_SWATCHES['gallery-white'];
+  const bevelColor = matte.bevelColor || swatch.bevelColor;
   const [copied, setCopied] = useState(false);
 
   const setParam = (key, value) => {
@@ -90,7 +115,7 @@ function TuningPanel({ matte, onChange }) {
   let lastGroup = null;
   return (
     <div className="space-y-1 rounded-lg border border-neutral-800 bg-neutral-900/60 p-3">
-      {TUNING_SLIDERS.map(([group, key, label, min, max, step]) => {
+      {TUNING_CONTROLS.map(([kind, group, key, label, min, max, step]) => {
         const value = params[key];
         const heading = group !== lastGroup ? group : null;
         lastGroup = group;
@@ -101,21 +126,51 @@ function TuningPanel({ matte, onChange }) {
                 {heading}
               </p>
             )}
-            <label className="flex items-center gap-2 text-xs text-neutral-400">
-              <span className="w-32 shrink-0">{label}</span>
-              <input
-                type="range"
-                min={min}
-                max={max}
-                step={step}
-                value={value}
-                onChange={(e) => setParam(key, Number(e.target.value))}
-                className="min-w-0 flex-1 accent-sky-400"
-              />
-              <span className="w-12 text-right tabular-nums text-neutral-300">
-                {Number(value).toFixed(step >= 1 ? 0 : 2)}
-              </span>
-            </label>
+            {kind === 'toggle' && (
+              <label className={`${CONTROL_ROW} cursor-pointer select-none`}>
+                <input
+                  type="checkbox"
+                  checked={value >= 0.5}
+                  onChange={(e) => setParam(key, e.target.checked ? 1 : 0)}
+                  className="accent-sky-400 cursor-pointer"
+                />
+                <span>{label}</span>
+              </label>
+            )}
+            {kind === 'colour' && (
+              <label className={CONTROL_ROW}>
+                <span className={CONTROL_LABEL}>{label}</span>
+                <input
+                  type="color"
+                  value={shade(bevelColor, value)}
+                  onChange={(e) => setParam(key, shadeAmount(bevelColor, e.target.value))}
+                  className="h-6 w-10 shrink-0 cursor-pointer rounded border border-neutral-700 bg-transparent p-0"
+                />
+                <span className="flex-1 tabular-nums text-neutral-500">
+                  {shade(bevelColor, value)}
+                </span>
+                <span className="w-12 text-right tabular-nums text-neutral-300">
+                  {Number(value).toFixed(2)}
+                </span>
+              </label>
+            )}
+            {kind === 'slider' && (
+              <label className={CONTROL_ROW}>
+                <span className={CONTROL_LABEL}>{label}</span>
+                <input
+                  type="range"
+                  min={min}
+                  max={max}
+                  step={step}
+                  value={value}
+                  onChange={(e) => setParam(key, Number(e.target.value))}
+                  className="min-w-0 flex-1 accent-sky-400"
+                />
+                <span className="w-12 text-right tabular-nums text-neutral-300">
+                  {Number(value).toFixed(step >= 1 ? 0 : 2)}
+                </span>
+              </label>
+            )}
           </div>
         );
       })}

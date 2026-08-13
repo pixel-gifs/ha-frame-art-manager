@@ -294,17 +294,29 @@ test('stored resolved values win over the catalogue', () => {
   assert.strictEqual(normalized.matte.shadowParams.faceTop, -0.6);
   // Untouched params still fill from the light-model defaults
   assert.strictEqual(normalized.matte.shadowParams.umbraBlur, 2);
-  assert.strictEqual(normalized.matte.shadowParams.rimWidth, 2.2);
+  assert.strictEqual(normalized.matte.shadowParams.rimWidth, 1.2);
 });
 
 test('normalizeRecipe resolves the baked light-model defaults', () => {
   const params = normalizeRecipe(makeRecipe()).matte.shadowParams;
   assert.strictEqual(params.bevelFeather, 0.25);
-  assert.strictEqual(params.rimWidth, 2.2);
+  assert.strictEqual(params.texturePitch, 0.5);
+  assert.strictEqual(params.rimWidth, 1.2);
   assert.strictEqual(params.rimOpacity, 1);
-  assert.strictEqual(params.rimFeather, 0.75);
+  assert.strictEqual(params.rimFeather, 0);
   assert.strictEqual(params.faceTop, -0.23);
   assert.strictEqual(params.faceLeft, 0.45);
+  // Face shadow gradient (#19): on, flipped so the dark end sits at the cut.
+  assert.strictEqual(params.faceGradOn, 1);
+  assert.strictEqual(params.faceGradStrength, 0.22);
+  assert.strictEqual(params.faceGradLength, 0.67);
+  assert.strictEqual(params.faceGradFeather, 1);
+  assert.strictEqual(params.faceGradFlip, 1);
+  // Layer switches all default on.
+  assert.strictEqual(params.facesOn, 1);
+  assert.strictEqual(params.rimsOn, 1);
+  assert.strictEqual(params.umbraOn, 1);
+  assert.strictEqual(params.penumbraOn, 1);
   assert.strictEqual(params.rimTop, -0.16);
   assert.strictEqual(params.rimLeft, 0.42);
   assert.strictEqual(params.shadowAngle, 135);
@@ -656,6 +668,75 @@ test('INTEGRATION: edge rims render and respond to tuning alone', async () => {
   const off = (await renderCollage(mk({ rimOpacity: 0 }), sources, { width: 960 })).buffer;
   assert.ok(!base.equals(tuned), 'rim tuning alone must change pixels');
   assert.ok(!base.equals(off), 'rims at default settings must actually render');
+});
+
+test('INTEGRATION: each texture renders distinctly at full JPEG quality', async () => {
+  // Gotcha: soft-light texture on a near-white matte is sub-JPEG-amplitude
+  // without the contrast boost, so this must be checked on encoded output at
+  // full quality — a preview-quality check passed while the tiles were
+  // invisible. fibre, weave and none must all differ from each other.
+  const src = await createSampleImage('flat3.jpg', 1200, 1600, { r: 180, g: 170, b: 160 });
+  const sources = { 'flat3.jpg': src };
+  const render = (matte) => renderCollage({
+    template: 'solo',
+    matte: { swatch: 'gallery-white', borderWidth: 220, ...matte },
+    slots: [{ imageId: 'flat3.jpg' }]
+  }, sources, { width: 3840 }).then(r => r.buffer);
+
+  const none = await render({ texture: 'none' });
+  const fibre = await render({ texture: 'fibre' });
+  const weave = await render({ texture: 'weave' });
+  assert.ok(!none.equals(fibre), 'fibre must be visible against no texture');
+  assert.ok(!none.equals(weave), 'weave must be visible against no texture');
+  assert.ok(!fibre.equals(weave), 'fibre and weave must not render alike');
+
+  // Strength and pitch are independent knobs over that same tile.
+  const fainter = await render({ texture: 'fibre', shadowParams: { textureOpacity: 0.05 } });
+  const wider = await render({ texture: 'fibre', shadowParams: { texturePitch: 2 } });
+  assert.ok(!fibre.equals(fainter), 'texture strength alone must change pixels');
+  assert.ok(!fibre.equals(wider), 'texture pitch alone must change pixels');
+});
+
+test('INTEGRATION: face shadow gradient renders and responds to its own params', async () => {
+  const src = await createSampleImage('flat4.jpg', 1200, 1600, { r: 180, g: 170, b: 160 });
+  const sources = { 'flat4.jpg': src };
+  const render = (sp) => renderCollage({
+    template: 'solo',
+    matte: { swatch: 'gallery-white', borderWidth: 220, shadowParams: sp },
+    slots: [{ imageId: 'flat4.jpg' }]
+  }, sources, { width: 3840 }).then(r => r.buffer);
+
+  const base = await render(undefined);
+  assert.ok(!base.equals(await render({ faceGradOn: 0 })), 'the gradient must render by default');
+  assert.ok(!base.equals(await render({ faceGradStrength: 0.8 })), 'strength must change pixels');
+  assert.ok(!base.equals(await render({ faceGradLength: 0.2 })), 'length must change pixels');
+  assert.ok(!base.equals(await render({ faceGradFeather: 0 })), 'feather must change pixels');
+  assert.ok(!base.equals(await render({ faceGradFlip: 0 })), 'flipping must change pixels');
+  // A zero-strength gradient is the same picture as switching it off.
+  assert.ok(
+    (await render({ faceGradStrength: 0 })).equals(await render({ faceGradOn: 0 })),
+    'zero strength and off must render identically'
+  );
+});
+
+test('INTEGRATION: layer switches turn their layer off', async () => {
+  const src = await createSampleImage('flat5.jpg', 1200, 1600, { r: 180, g: 170, b: 160 });
+  const sources = { 'flat5.jpg': src };
+  const render = (sp) => renderCollage({
+    template: 'solo',
+    matte: { swatch: 'gallery-white', borderWidth: 220, shadowParams: sp },
+    slots: [{ imageId: 'flat5.jpg' }]
+  }, sources, { width: 960 }).then(r => r.buffer);
+
+  const base = await render(undefined);
+  for (const key of ['facesOn', 'rimsOn', 'umbraOn', 'penumbraOn']) {
+    assert.ok(!base.equals(await render({ [key]: 0 })), `${key}=0 must change pixels`);
+  }
+  // Switching a shadow layer off matches zeroing its opacity.
+  assert.ok(
+    (await render({ umbraOn: 0 })).equals(await render({ umbraOpacity: 0 })),
+    'umbraOn=0 and umbraOpacity=0 must render identically'
+  );
 });
 
 test('INTEGRATION: tuning overrides change the render', async () => {

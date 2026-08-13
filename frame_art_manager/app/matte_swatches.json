@@ -1,95 +1,95 @@
 {
-  "$comment": "Curated matte swatch catalogue — single source of truth for server (collage_service.js) and client (collage-ui/src/geometry.js). Each swatch: surface + bevel colour, texture strength, bevel width (px at 4K). Face/rim shading and the shadow layers are a global light model in collage_service.js (LOOK_DEFAULTS, baked from Matt's tuning lab session 2026-08-12), per-recipe tunable via matte.shadowParams. Key order is the UI grid order.",
+  "$comment": "Curated matte swatch catalogue — single source of truth for server (collage_service.js) and client (collage-ui/src/geometry.js). Each swatch: surface + bevel colour, texture strength, bevel width (px at 4K). Face/rim shading, the face shadow gradient, the texture pitch and the shadow layers are a global light model in collage_service.js (LOOK_DEFAULTS, baked from Matt's tuning lab sessions 2026-08-12 and 2026-08-13), per-recipe tunable via matte.shadowParams. Texture strengths were rescaled by 0.26/0.55 on 2026-08-13 to match the retuned Gallery White, keeping their relative order. Key order is the UI grid order.",
   "swatches": {
     "gallery-white": {
       "label": "Gallery White",
       "matteColor": "#f4f1ec",
       "bevelColor": "#fdfbf5",
-      "textureOpacity": 0.55,
-      "bevelWidth": 13
+      "textureOpacity": 0.26,
+      "bevelWidth": 12
     },
     "museum-white": {
       "label": "Museum White",
       "matteColor": "#f8f7f2",
       "bevelColor": "#fffefa",
-      "textureOpacity": 0.5,
-      "bevelWidth": 13
+      "textureOpacity": 0.24,
+      "bevelWidth": 12
     },
     "cool-white": {
       "label": "Cool White",
       "matteColor": "#f2f3f1",
       "bevelColor": "#fbfcfb",
-      "textureOpacity": 0.5,
-      "bevelWidth": 13
+      "textureOpacity": 0.24,
+      "bevelWidth": 12
     },
     "antique-white": {
       "label": "Antique White",
       "matteColor": "#efe5cf",
       "bevelColor": "#f9f1dd",
-      "textureOpacity": 0.6,
-      "bevelWidth": 13
+      "textureOpacity": 0.28,
+      "bevelWidth": 12
     },
     "warm-grey-white": {
       "label": "Warm Grey-White",
       "matteColor": "#e9e4d8",
       "bevelColor": "#f4f0e6",
-      "textureOpacity": 0.55,
-      "bevelWidth": 13
+      "textureOpacity": 0.26,
+      "bevelWidth": 12
     },
     "ivory": {
       "label": "Ivory",
       "matteColor": "#f1e9d6",
       "bevelColor": "#faf4e4",
-      "textureOpacity": 0.6,
-      "bevelWidth": 13
+      "textureOpacity": 0.28,
+      "bevelWidth": 12
     },
     "linen": {
       "label": "Linen",
       "matteColor": "#e7dfcd",
       "bevelColor": "#f5efdf",
-      "textureOpacity": 0.95,
-      "bevelWidth": 13
+      "textureOpacity": 0.45,
+      "bevelWidth": 12
     },
     "dove-grey": {
       "label": "Dove Grey",
       "matteColor": "#d5d1c9",
       "bevelColor": "#eae7df",
-      "textureOpacity": 0.5,
-      "bevelWidth": 13
+      "textureOpacity": 0.24,
+      "bevelWidth": 12
     },
     "sage": {
       "label": "Sage",
       "matteColor": "#b7bda9",
       "bevelColor": "#d3d8c6",
-      "textureOpacity": 0.6,
-      "bevelWidth": 13
+      "textureOpacity": 0.28,
+      "bevelWidth": 12
     },
     "clay": {
       "label": "Clay",
       "matteColor": "#ad7f63",
       "bevelColor": "#c69a7e",
-      "textureOpacity": 0.6,
-      "bevelWidth": 13
+      "textureOpacity": 0.28,
+      "bevelWidth": 12
     },
     "charcoal": {
       "label": "Charcoal",
       "matteColor": "#3b3b38",
       "bevelColor": "#5c5a52",
-      "textureOpacity": 0.45,
+      "textureOpacity": 0.21,
       "bevelWidth": 12
     },
     "ink-blue": {
       "label": "Ink Blue",
       "matteColor": "#2c3745",
       "bevelColor": "#4d5a6a",
-      "textureOpacity": 0.45,
+      "textureOpacity": 0.21,
       "bevelWidth": 12
     },
     "museum-black": {
       "label": "Museum Black",
       "matteColor": "#131311",
       "bevelColor": "#3b3933",
-      "textureOpacity": 0.45,
+      "textureOpacity": 0.21,
       "bevelWidth": 11
     }
   },
